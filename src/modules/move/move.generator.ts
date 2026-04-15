@@ -140,7 +140,7 @@ export async function generateTasksForCase(caseId: string) {
       `
     );
 
-    const templates = templateResult.rows.filter((template: { requires_car: boolean; requires_children: boolean; }) => {
+    const templates = templateResult.rows.filter((template) => {
       if (template.requires_car === true && !moveCase.has_car) {
         return false;
       }
@@ -152,7 +152,7 @@ export async function generateTasksForCase(caseId: string) {
       return true;
     });
 
-    const templateIds = templates.map((template: { id: any; }) => template.id);
+    const templateIds = templates.map((template) => template.id);
 
     let linksByTemplateId = new Map<string, TemplateLinkRow>();
 
@@ -172,8 +172,8 @@ export async function generateTasksForCase(caseId: string) {
         [templateIds]
       );
 
-      linksByTemplateId = new Map(
-        linkResult.rows.map((row: { task_template_id: any; }) => [row.task_template_id, row])
+      linksByTemplateId = new Map<string, TemplateLinkRow>(
+        linkResult.rows.map((row) => [row.task_template_id, row])
       );
     }
 

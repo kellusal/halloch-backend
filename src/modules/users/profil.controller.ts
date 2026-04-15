@@ -1,9 +1,7 @@
 import { Request, Response } from 'express';
+import { sendInternalServerError } from '../../middleware/error.middleware';
 import { refreshActiveMoveCasesForUser } from '../move/move.task-sync';
-import {
-  getMyProfile,
-  updateMyProfile,
-} from './profil.repository';
+import { getMyProfile, updateMyProfile } from './profil.repository';
 
 export async function getMyProfileHandler(req: Request, res: Response) {
   try {
@@ -19,12 +17,7 @@ export async function getMyProfileHandler(req: Request, res: Response) {
 
     return res.status(200).json(profile);
   } catch (error) {
-    console.error('Error loading my profile:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error loading my profile:');
   }
 }
 
@@ -74,16 +67,11 @@ export async function updateMyProfileHandler(req: Request, res: Response) {
       employerName,
     });
 
-    // Nach erfolgreicher Profiländerung alle aktiven Umzugsfälle neu synchronisieren
+    // Nach erfolgreicher Profiländerung alle aktiven Umzugsfälle neu synchronisieren.
     await refreshActiveMoveCasesForUser(Number(userId));
 
     return res.status(200).json(updatedProfile);
   } catch (error) {
-    console.error('Error updating my profile:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error updating my profile:');
   }
 }

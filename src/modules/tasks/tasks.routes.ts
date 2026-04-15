@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { pool } from '../../db/pool';
+import { sendInternalServerError } from '../../middleware/error.middleware';
 import { requireAuth } from '../../middleware/requireAuth';
 
 const router = Router();
@@ -27,6 +28,42 @@ type MoveCaseTaskRow = {
   link_label: string | null;
   completed_at: string | null;
   created_at: string | null;
+};
+
+type OverviewModule = {
+  id: string;
+  title: string;
+  subtitle: string;
+  progress: number;
+  openCount: number;
+  nextTask: string | null;
+  route: string;
+  tone: 'red';
+  statusLabel: string;
+};
+
+type OverviewTask = {
+  id: string;
+  title: string;
+  module: string;
+  due: string;
+  status: 'open' | 'soon';
+  priority: 'high' | 'medium' | 'low';
+  route: string;
+};
+
+type OverviewDoneTask = {
+  id: string;
+  title: string;
+  module: string;
+  when: string;
+};
+
+type FocusTask = {
+  title: string;
+  module: string;
+  due: string;
+  route: string;
 };
 
 router.get('/overview', requireAuth, async (req: Request, res: Response) => {
@@ -62,15 +99,15 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
     const latestMoveCase: LatestMoveCaseRow | null =
       latestMoveCaseResult.rows[0] ?? null;
 
-    let modules: any[] = [];
-    let tasks: any[] = [];
-    let doneTasks: any[] = [];
+    let modules: OverviewModule[] = [];
+    let tasks: OverviewTask[] = [];
+    let doneTasks: OverviewDoneTask[] = [];
     let summary = {
       open: 0,
       today: 0,
       modules: 0,
     };
-    let focusTask: any = null;
+    let focusTask: FocusTask | null = null;
 
     if (latestMoveCase) {
       const moduleTasksResult = await pool.query<MoveCaseTaskRow>(
@@ -99,15 +136,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         [latestMoveCase.id]
       );
 
-      const moduleTasks: MoveCaseTaskRow[] = moduleTasksResult.rows;
-
-      const openTasks = moduleTasks.filter((task: MoveCaseTaskRow) => {
-        return task.status === 'open';
-      });
-
-      const doneModuleTasks = moduleTasks.filter((task: MoveCaseTaskRow) => {
-        return task.status === 'done';
-      });
+      const moduleTasks = moduleTasksResult.rows;
+      const openTasks = moduleTasks.filter((task) => task.status === 'open');
+      const doneModuleTasks = moduleTasks.filter((task) => task.status === 'done');
 
       const progress =
         moduleTasks.length === 0
@@ -120,7 +151,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         {
           id: 'umzug',
           title: 'Umzug',
-          subtitle: `${latestMoveCase.from_city_name ?? '—'} → ${latestMoveCase.to_city_name ?? '—'}`,
+          subtitle: `${latestMoveCase.from_city_name ?? '-'} -> ${latestMoveCase.to_city_name ?? '-'}`,
           progress,
           openCount: openTasks.length,
           nextTask: nextTask?.title ?? null,
@@ -130,24 +161,24 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         },
       ];
 
-      tasks = openTasks.slice(0, 6).map((task: MoveCaseTaskRow) => ({
-  id: task.id,
-  title: task.title,
-  module: 'Umzug',
-  due: formatDueLabel(task.due_date),
-  status: isDueSoon(task.due_date) ? 'soon' : 'open',
-  priority: getPriority(task.due_date),
-  route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${task.id}`,
-}));
+      tasks = openTasks.slice(0, 6).map((task) => ({
+        id: task.id,
+        title: task.title,
+        module: 'Umzug',
+        due: formatDueLabel(task.due_date),
+        status: isDueSoon(task.due_date) ? 'soon' : 'open',
+        priority: getPriority(task.due_date),
+        route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${task.id}`,
+      }));
 
       doneTasks = doneModuleTasks
-        .sort((a: MoveCaseTaskRow, b: MoveCaseTaskRow) => {
+        .sort((a, b) => {
           const aDate = a.completed_at ? new Date(a.completed_at).getTime() : 0;
           const bDate = b.completed_at ? new Date(b.completed_at).getTime() : 0;
           return bDate - aDate;
         })
         .slice(0, 4)
-        .map((task: MoveCaseTaskRow) => ({
+        .map((task) => ({
           id: task.id,
           title: task.title,
           module: 'Umzug',
@@ -155,19 +186,17 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         }));
 
       focusTask = openTasks[0]
-  ? {
-      title: openTasks[0].title,
-      module: 'Umzug',
-      due: formatDueLabel(openTasks[0].due_date),
-      route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${openTasks[0].id}`,
-    }
-  : null;
+        ? {
+            title: openTasks[0].title,
+            module: 'Umzug',
+            due: formatDueLabel(openTasks[0].due_date),
+            route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${openTasks[0].id}`,
+          }
+        : null;
 
       summary = {
         open: openTasks.length,
-        today: openTasks.filter((task: MoveCaseTaskRow) =>
-          isDueToday(task.due_date)
-        ).length,
+        today: openTasks.filter((task) => isDueToday(task.due_date)).length,
         modules: modules.length,
       };
     }
@@ -180,12 +209,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
       doneTasks,
     });
   } catch (error) {
-    console.error('Error loading tasks overview:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error loading tasks overview:');
   }
 });
 
@@ -222,7 +246,7 @@ function getPriority(value?: string | null): 'high' | 'medium' | 'low' {
 }
 
 function formatDueLabel(value?: string | null): string {
-  if (!value) return 'Später';
+  if (!value) return 'Spaeter';
 
   const due = new Date(value);
   const now = new Date();

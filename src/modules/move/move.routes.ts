@@ -1,5 +1,6 @@
 import { Request, Response, Router } from 'express';
 import { pool } from '../../db/pool';
+import { sendInternalServerError } from '../../middleware/error.middleware';
 import { requireAuth } from '../../middleware/requireAuth';
 import { refreshMoveCaseTasks } from './move.task-sync';
 
@@ -29,6 +30,23 @@ type MoveCaseRow = {
   updated_at: string;
   from_city_name?: string | null;
   to_city_name?: string | null;
+};
+
+type MoveUserRow = {
+  id: string;
+  email: string;
+  language: string | null;
+  is_active: boolean | null;
+};
+
+type CityLookupRow = {
+  id: string;
+  name: string;
+  canton_id: string | null;
+};
+
+type IdRow = {
+  id: string;
 };
 
 function buildMoveCaseResponse(row: MoveCaseRow) {
@@ -130,20 +148,13 @@ function normalizeSwissDateToIso(value: string): string | null {
   return `${year}-${month}-${day}`;
 }
 
-function normalizeLanguageCode(value: string): 'de' | 'fr' | 'en' {
-  const trimmed = String(value ?? 'de').trim().toLowerCase();
-
-  if (trimmed.startsWith('fr')) return 'fr';
-  if (trimmed.startsWith('en')) return 'en';
-  return 'de';
-}
-
 router.get('/ping', (_req: Request, res: Response) => {
   res.status(200).json({ ok: true, route: 'move' });
 });
 
 router.post('/cases', requireAuth, async (req: Request, res: Response) => {
   const client = await pool.connect();
+  let transactionOpen = false;
 
   try {
     const {
@@ -191,8 +202,9 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
     }
 
     await client.query('BEGIN');
+    transactionOpen = true;
 
-    const userResult = await client.query(
+    const userResult = await client.query<MoveUserRow>(
       `
       SELECT id, email, language, is_active
       FROM app.users
@@ -216,9 +228,7 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    const userLanguage = normalizeLanguageCode(userResult.rows[0].language);
-
-    const fromCityResult = await client.query(
+    const fromCityResult = await client.query<CityLookupRow>(
       `
       SELECT id, name, canton_id
       FROM move_cities
@@ -228,7 +238,7 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
       [String(fromCity).trim()]
     );
 
-    const toCityResult = await client.query(
+    const toCityResult = await client.query<CityLookupRow>(
       `
       SELECT id, name, canton_id
       FROM move_cities
@@ -330,6 +340,7 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
     const createdCase = insertCaseResult.rows[0];
 
     await client.query('COMMIT');
+    transactionOpen = false;
 
     await refreshMoveCaseTasks(createdCase.id);
 
@@ -372,14 +383,10 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
       case: buildMoveCaseResponse(refreshedCaseResult.rows[0] ?? createdCase),
     });
   } catch (error) {
-    await client.query('ROLLBACK');
-
-    console.error('Error creating move case:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    if (transactionOpen) {
+      await client.query('ROLLBACK');
+    }
+    return sendInternalServerError(res, error, 'Error creating move case:');
   } finally {
     client.release();
   }
@@ -436,12 +443,11 @@ router.get('/cases/current-active', requireAuth, async (req: Request, res: Respo
       case: result.rows[0] ? buildMoveCaseResponse(result.rows[0]) : null,
     });
   } catch (error) {
-    console.error('Error loading current active move case:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(
+      res,
+      error,
+      'Error loading current active move case:'
+    );
   }
 });
 
@@ -502,12 +508,7 @@ router.get('/cases/:caseId', requireAuth, async (req: Request, res: Response) =>
       case: buildMoveCaseResponse(result.rows[0]),
     });
   } catch (error) {
-    console.error('Error loading move case:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error loading move case:');
   }
 });
 
@@ -663,12 +664,7 @@ router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) 
       case: buildMoveCaseResponse(updatedCaseResult.rows[0]),
     });
   } catch (error) {
-    console.error('Error updating move case:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error updating move case:');
   }
 });
 
@@ -693,7 +689,7 @@ router.get('/cases/:caseId/tasks', requireAuth, async (req: Request, res: Respon
       });
     }
 
-    const caseCheck = await pool.query(
+    const caseCheck = await pool.query<IdRow>(
       `
       SELECT id
       FROM move_cases
@@ -760,12 +756,7 @@ router.get('/cases/:caseId/tasks', requireAuth, async (req: Request, res: Respon
       tasks: tasksResult.rows,
     });
   } catch (error) {
-    console.error('Error loading move tasks:', error);
-
-    return res.status(500).json({
-      message: 'Internal server error',
-      error: error instanceof Error ? error.message : String(error),
-    });
+    return sendInternalServerError(res, error, 'Error loading move tasks:');
   }
 });
 
@@ -783,7 +774,7 @@ router.get(
         });
       }
 
-      const caseCheck = await pool.query(
+      const caseCheck = await pool.query<IdRow>(
         `
         SELECT id
         FROM move_cases
@@ -853,7 +844,7 @@ router.get(
         });
       }
 
-      const nextTaskResult = await pool.query(
+      const nextTaskResult = await pool.query<IdRow>(
         `
         SELECT id
         FROM move_case_tasks
@@ -883,12 +874,7 @@ router.get(
         nextTaskId: nextTaskResult.rows[0]?.id ?? null,
       });
     } catch (error) {
-      console.error('Error loading move task:', error);
-
-      return res.status(500).json({
-        message: 'Internal server error',
-        error: error instanceof Error ? error.message : String(error),
-      });
+      return sendInternalServerError(res, error, 'Error loading move task:');
     }
   }
 );
@@ -907,7 +893,7 @@ router.patch(
         });
       }
 
-      const caseCheck = await pool.query(
+      const caseCheck = await pool.query<IdRow>(
         `
         SELECT id
         FROM move_cases
@@ -982,7 +968,7 @@ router.patch(
 
       await refreshMoveCaseTasks(caseId as string);
 
-      const nextTaskResult = await pool.query(
+      const nextTaskResult = await pool.query<IdRow>(
         `
         SELECT id
         FROM move_case_tasks
@@ -999,12 +985,11 @@ router.patch(
         nextTaskId: nextTaskResult.rows[0]?.id ?? null,
       });
     } catch (error) {
-      console.error('Error completing move task:', error);
-
-      return res.status(500).json({
-        message: 'Internal server error',
-        error: error instanceof Error ? error.message : String(error),
-      });
+      return sendInternalServerError(
+        res,
+        error,
+        'Error completing move task:'
+      );
     }
   }
 );

@@ -1,9 +1,6 @@
 import 'dotenv/config';
 import app from './app';
 import { pool } from './db/pool';
-import profileRoutes from './modules/users/profil.routes';
-
-app.use('/profile', profileRoutes);
 
 const port = Number(process.env.PORT) || 3001;
 

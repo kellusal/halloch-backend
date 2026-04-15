@@ -1,7 +1,41 @@
-import { Request, Response } from 'express';
+import { NextFunction, Request, Response } from 'express';
+import { AppError } from '../../middleware/error.middleware';
 import * as authService from './auth.service';
 
-export async function register(req: Request, res: Response) {
+function mapAuthError(error: unknown) {
+  const message =
+    error instanceof Error ? error.message : 'Internal server error';
+
+  if (
+    message === 'Email already exists' ||
+    message === 'Email is required' ||
+    message === 'Password is required' ||
+    message === 'Password must be at least 6 characters long'
+  ) {
+    return new AppError(message, 400);
+  }
+
+  if (
+    message === 'Invalid email or password' ||
+    message === 'User is inactive'
+  ) {
+    return new AppError(message, 401);
+  }
+
+  if (message === 'User not found') {
+    return new AppError(message, 404);
+  }
+
+  return error instanceof Error
+    ? error
+    : new AppError('Internal server error', 500, { expose: false });
+}
+
+export async function register(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
   try {
     const result = await authService.register({
       email: req.body.email,
@@ -13,23 +47,15 @@ export async function register(req: Request, res: Response) {
 
     return res.status(201).json(result);
   } catch (error) {
-    const message =
-      error instanceof Error ? error.message : 'Registration failed';
-
-    if (
-      message === 'Email already exists' ||
-      message === 'Email is required' ||
-      message === 'Password is required' ||
-      message === 'Password must be at least 6 characters long'
-    ) {
-      return res.status(400).json({ message });
-    }
-
-    return res.status(500).json({ message: 'Internal server error' });
+    return next(mapAuthError(error));
   }
 }
 
-export async function login(req: Request, res: Response) {
+export async function login(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
   try {
     const result = await authService.login({
       email: req.body.email,
@@ -38,41 +64,19 @@ export async function login(req: Request, res: Response) {
 
     return res.status(200).json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Login failed';
-
-    if (
-      message === 'Email is required' ||
-      message === 'Password is required'
-    ) {
-      return res.status(400).json({ message });
-    }
-
-    if (
-      message === 'Invalid email or password' ||
-      message === 'User is inactive'
-    ) {
-      return res.status(401).json({ message });
-    }
-
-    return res.status(500).json({ message: 'Internal server error' });
+    return next(mapAuthError(error));
   }
 }
 
-export async function me(req: Request, res: Response) {
+export async function me(req: Request, res: Response, next: NextFunction) {
   try {
     if (!req.user?.id) {
-      return res.status(401).json({ message: 'Unauthorized' });
+      return next(new AppError('Unauthorized', 401));
     }
 
-    const result = await authService.getMe(req.user.id);
+    const result = await authService.getMe(Number(req.user.id));
     return res.status(200).json(result);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Could not load user';
-
-    if (message === 'User not found') {
-      return res.status(404).json({ message });
-    }
-
-    return res.status(500).json({ message: 'Internal server error' });
+    return next(mapAuthError(error));
   }
 }

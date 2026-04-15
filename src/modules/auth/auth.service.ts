@@ -1,5 +1,5 @@
 import bcrypt from 'bcrypt';
-import jwt from 'jsonwebtoken';
+import jwt, { Secret, SignOptions } from 'jsonwebtoken';
 import { pool } from '../../db/pool';
 
 type RegisterInput = {
@@ -28,11 +28,13 @@ type DbUserRow = {
 };
 
 function signToken(user: { id: number; email: string }) {
-  const secret = process.env.JWT_SECRET;
+  const secret = process.env.JWT_SECRET as Secret | undefined;
 
   if (!secret) {
     throw new Error('JWT_SECRET is not configured');
   }
+
+  const expiresIn = (process.env.JWT_EXPIRES_IN || '7d') as SignOptions['expiresIn'];
 
   return jwt.sign(
     {
@@ -41,7 +43,7 @@ function signToken(user: { id: number; email: string }) {
     },
     secret,
     {
-      expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+      expiresIn,
     }
   );
 }
