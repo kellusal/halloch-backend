@@ -12,11 +12,17 @@ const move_routes_1 = __importDefault(require("./modules/move/move.routes"));
 const tasks_routes_1 = __importDefault(require("./modules/tasks/tasks.routes"));
 const profil_routes_1 = __importDefault(require("./modules/users/profil.routes"));
 const app = (0, express_1.default)();
+const allowedOrigins = [
+    'http://localhost:8081',
+    'http://127.0.0.1:8081',
+    'https://api.halloch.ch',
+];
 app.use((0, cors_1.default)({
-    origin: '*',
+    origin: allowedOrigins,
     methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+app.options('*', (0, cors_1.default)());
 app.use(express_1.default.json());
 app.get('/health', (_req, res) => {
     res.status(200).json({ ok: true });
