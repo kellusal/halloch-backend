@@ -1,4 +1,3 @@
-import cors from 'cors';
 import 'dotenv/config';
 import express from 'express';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
@@ -15,15 +14,23 @@ const allowedOrigins = [
   'https://api.halloch.ch',
 ];
 
-app.use(
-  cors({
-    origin: allowedOrigins,
-    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
-  })
-);
+app.use((req, res, next) => {
+  const origin = req.headers.origin;
 
-app.options(/.*/, cors());
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+
+  res.header('Vary', 'Origin');
+  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+
+  next();
+});
 
 app.use(express.json());
 
