@@ -8,11 +8,17 @@ import profileRoutes from './modules/users/profil.routes';
 
 const app = express();
 
-const allowedOrigins = [
-  'http://localhost:8081',
-  'http://127.0.0.1:8081',
-  'https://api.halloch.ch',
-];
+const allowedOrigins =
+  process.env.FRONTEND_ORIGINS?.split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean) ?? [
+      'http://localhost:3000',
+      'http://127.0.0.1:3000',
+      'http://localhost:8081',
+      'http://127.0.0.1:8081',
+      'https://halloch.ch',
+      'https://www.halloch.ch',
+    ];
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
