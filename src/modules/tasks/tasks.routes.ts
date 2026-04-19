@@ -151,7 +151,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         {
           id: 'umzug',
           title: 'Umzug',
-          subtitle: `${latestMoveCase.from_city_name ?? '-'} -> ${latestMoveCase.to_city_name ?? '-'}`,
+          subtitle: `${latestMoveCase.from_city_name ?? '-'} → ${latestMoveCase.to_city_name ?? '-'}`,
           progress,
           openCount: openTasks.length,
           nextTask: nextTask?.title ?? null,
@@ -246,7 +246,7 @@ function getPriority(value?: string | null): 'high' | 'medium' | 'low' {
 }
 
 function formatDueLabel(value?: string | null): string {
-  if (!value) return 'Spaeter';
+  if (!value) return 'Später';
 
   const due = new Date(value);
   const now = new Date();

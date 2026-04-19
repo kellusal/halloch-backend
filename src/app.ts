@@ -1,5 +1,6 @@
-import 'dotenv/config';
+﻿import 'dotenv/config';
 import express from 'express';
+import { env } from './config/env';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
 import authRouter from './modules/auth/auth.routes';
 import moveRouter from './modules/move/move.routes';
@@ -8,34 +9,24 @@ import profileRoutes from './modules/users/profil.routes';
 
 const app = express();
 
-const allowedOrigins =
-  process.env.FRONTEND_ORIGINS?.split(',')
-    .map((origin) => origin.trim())
-    .filter(Boolean) ?? [
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:8081',
-      'http://127.0.0.1:8081',
-      'https://halloch.ch',
-      'https://www.halloch.ch',
-    ];
+const allowedOrigins = env.FRONTEND_ORIGINS;
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
 
   res.header('Vary', 'Origin');
   res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  }
+
   if (req.method === 'OPTIONS') {
     return res.sendStatus(204);
   }
 
-  next();
+  return next();
 });
 
 app.use(express.json());

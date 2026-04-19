@@ -23,6 +23,7 @@ declare module 'pg' {
       values?: unknown[]
     ): Promise<QueryResult<T>>;
     connect(): Promise<PoolClient>;
+    end(): Promise<void>;
     on(event: 'error', listener: (err: Error) => void): this;
   }
 }

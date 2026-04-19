@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response } from 'express';
 import jwt, { JwtPayload } from 'jsonwebtoken';
+import { env } from '../config/env';
 import { AppError } from './error.middleware';
 
 type TokenPayload = JwtPayload & {
@@ -18,27 +19,18 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
     }
 
     const token = authHeader.substring(7);
-    const secret = process.env.JWT_SECRET;
-
-    if (!secret) {
-      return next(
-        new AppError('JWT_SECRET fehlt in der Server-Konfiguration.', 500, {
-          expose: false,
-          code: 'JWT_SECRET_MISSING',
-        })
-      );
-    }
+    const secret = env.JWT_SECRET;
 
     const decoded = jwt.verify(token, secret) as TokenPayload | string;
 
     if (typeof decoded === 'string') {
-      return next(new AppError('Ungueltiger Token.', 401));
+      return next(new AppError('Ungültiger Token.', 401));
     }
 
     const userId = decoded.userId || decoded.id || decoded.sub;
 
     if (!userId || typeof userId !== 'string') {
-      return next(new AppError('Token enthaelt keine gueltige User-ID.', 401));
+      return next(new AppError('Token enthält keine gültige User-ID.', 401));
     }
 
     req.user = {
@@ -49,6 +41,6 @@ export function requireAuth(req: Request, _res: Response, next: NextFunction) {
     return next();
   } catch (error) {
     console.error('Auth error:', error);
-    return next(new AppError('Ungueltiger oder abgelaufener Token.', 401));
+    return next(new AppError('Ungültiger oder abgelaufener Token.', 401));
   }
 }

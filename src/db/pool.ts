@@ -1,14 +1,8 @@
-import 'dotenv/config';
 import { Pool } from 'pg';
-
-const connectionString = process.env.DATABASE_URL;
-
-if (!connectionString) {
-  throw new Error('DATABASE_URL is not configured');
-}
+import { env } from '../config/env';
 
 export const pool = new Pool({
-  connectionString,
+  connectionString: env.DATABASE_URL,
 });
 
 pool.on('error', (err: Error) => {

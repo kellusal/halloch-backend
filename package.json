@@ -2,18 +2,26 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "build": "tsc",
-    "start": "node dist/server.js"
+    "start": "node dist/server.js",
+    "typecheck": "tsc --noEmit",
+    "pm2:start": "pm2 start ecosystem.config.cjs --update-env",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs --update-env",
+    "pm2:logs": "pm2 logs halloch-backend"
   },
   "dependencies": {
     "bcrypt": "^6.0.0",
+    "compression": "^1.8.1",
     "cors": "^2.8.6",
     "dotenv": "^17.4.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^7.5.1",
+    "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
     "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/bcrypt": "^6.0.0",
+    "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
