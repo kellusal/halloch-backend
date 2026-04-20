@@ -398,6 +398,65 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
   }
 });
 
+router.get('/cases', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({
+        message: 'Benutzer konnte nicht aus dem Token gelesen werden.',
+      });
+    }
+
+    const result = await pool.query<MoveCaseRow>(
+      `
+      SELECT
+        mc.id,
+        mc.user_id,
+        mc.from_city_id,
+        mc.to_city_id,
+        mc.move_date,
+        mc.has_car,
+        mc.has_children,
+        mc.has_dog,
+        mc.from_street,
+        mc.from_house_number,
+        mc.from_zip,
+        mc.to_street,
+        mc.to_house_number,
+        mc.to_zip,
+        mc.children_count,
+        mc.marital_status,
+        mc.health_insurance_name,
+        mc.employer_name,
+        mc.status,
+        mc.created_at,
+        mc.updated_at,
+        fc.name AS from_city_name,
+        tc.name AS to_city_name
+      FROM move_cases mc
+      LEFT JOIN move_cities fc ON fc.id = mc.from_city_id
+      LEFT JOIN move_cities tc ON tc.id = mc.to_city_id
+      WHERE mc.user_id = $1
+      ORDER BY
+        CASE
+          WHEN mc.status IN ('draft', 'in_progress') THEN 0
+          WHEN mc.status = 'done' THEN 2
+          ELSE 1
+        END,
+        mc.created_at DESC
+      `,
+      [userId]
+    );
+
+    return res.status(200).json({
+      cases: result.rows.map((row) => buildMoveCaseResponse(row)),
+    });
+  } catch (error) {
+    return sendInternalServerError(res, error, 'Error loading move cases:');
+  }
+});
+
 router.get('/cases/current-active', requireAuth, async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
