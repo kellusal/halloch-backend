@@ -39,6 +39,10 @@ type MoveTaskTemplateRow = {
   description_de: string | null;
   description_fr: string | null;
   description_en: string | null;
+  action_type: string | null;
+  action_payload: Record<string, unknown> | null;
+  secondary_action_type: string | null;
+  secondary_action_payload: Record<string, unknown> | null;
 };
 
 type TemplateLinkRow = {
@@ -135,6 +139,8 @@ type TaskActionMapping = {
   primary: TaskAction | null;
   secondary: TaskAction | null;
 };
+
+const SUPPORTED_ACTION_TYPES = new Set(['web', 'email', 'copy_text', 'whatsapp']);
 
 type GeneratedTaskRow = {
   templateId: string;
@@ -544,12 +550,14 @@ export function mapCapabilitiesToActions(
     });
 
     if (capability.capabilityKey === 'prepare_email') {
+      const recipientSource = asString(capability.payload.recipient_source);
       const to = asString(capability.payload.to) ?? resolvedContext.service?.office_email ?? null;
-      if (!to) continue;
+      if (!to && recipientSource !== 'user_input') continue;
       actions.push({
         actionType: 'email',
         actionPayload: {
           to,
+          recipient_source: recipientSource,
           label,
           subject: buildLocalizedPayloadValue(capability.payload, 'subject'),
           body: buildLocalizedPayloadValue(capability.payload, 'body'),
@@ -600,6 +608,32 @@ export function mapCapabilitiesToActions(
   return {
     primary: actions[0] ?? null,
     secondary: actions[1] ?? null,
+  };
+}
+
+function mapLegacyTemplateActions(template: MoveTaskTemplateRow): TaskActionMapping {
+  const primaryActionType = asString(template.action_type);
+  const secondaryActionType = asString(template.secondary_action_type);
+
+  const primary =
+    primaryActionType && SUPPORTED_ACTION_TYPES.has(primaryActionType)
+      ? {
+          actionType: primaryActionType,
+          actionPayload: template.action_payload ?? {},
+        }
+      : null;
+
+  const secondary =
+    secondaryActionType && SUPPORTED_ACTION_TYPES.has(secondaryActionType)
+      ? {
+          actionType: secondaryActionType,
+          actionPayload: template.secondary_action_payload ?? {},
+        }
+      : null;
+
+  return {
+    primary,
+    secondary,
   };
 }
 
@@ -921,6 +955,18 @@ async function loadTemplates(client: PoolClient) {
   const headerEnSelect = templateColumns.has('header_en')
     ? "NULLIF(header_en, '') AS header_en"
     : 'NULL::text AS header_en';
+  const actionTypeSelect = templateColumns.has('action_type')
+    ? 'action_type'
+    : 'NULL::text AS action_type';
+  const actionPayloadSelect = templateColumns.has('action_payload')
+    ? 'action_payload'
+    : 'NULL::jsonb AS action_payload';
+  const secondaryActionTypeSelect = templateColumns.has('secondary_action_type')
+    ? 'secondary_action_type'
+    : 'NULL::text AS secondary_action_type';
+  const secondaryActionPayloadSelect = templateColumns.has('secondary_action_payload')
+    ? 'secondary_action_payload'
+    : 'NULL::jsonb AS secondary_action_payload';
 
   if (
     !templateColumns.has('service_slug') ||
@@ -955,7 +1001,11 @@ async function loadTemplates(client: PoolClient) {
       NULLIF(title_en, '') AS title_en,
       NULLIF(description_de, '') AS description_de,
       NULLIF(description_fr, '') AS description_fr,
-      NULLIF(description_en, '') AS description_en
+      NULLIF(description_en, '') AS description_en,
+      ${actionTypeSelect},
+      ${actionPayloadSelect},
+      ${secondaryActionTypeSelect},
+      ${secondaryActionPayloadSelect}
     FROM move_task_templates
     WHERE COALESCE(is_active, true) = true
     ORDER BY COALESCE(sort_order, 0), created_at, id
@@ -1454,11 +1504,22 @@ export async function generateMoveCaseTasks(caseId: string) {
           servicesBySlug,
           linksByTemplateId
         );
-        const actions = mapCapabilitiesToActions(
-          capabilitiesByTemplateId.get(String(template.id)) ?? [],
-          resolvedContext
-        );
-        const taskRow = buildTaskRow(template, context, resolvedContext, actions);
+      const capabilityActions = mapCapabilitiesToActions(
+        capabilitiesByTemplateId.get(String(template.id)) ?? [],
+        resolvedContext
+      );
+      const legacyActions =
+        capabilityActions.primary || capabilityActions.secondary
+          ? capabilityActions
+          : mapLegacyTemplateActions(template);
+      const taskRow = buildTaskRow(
+        template,
+        context,
+        resolvedContext,
+        legacyActions.primary || legacyActions.secondary
+          ? legacyActions
+          : createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabel)
+      );
 
         await upsertMoveCaseTask(
           client,
