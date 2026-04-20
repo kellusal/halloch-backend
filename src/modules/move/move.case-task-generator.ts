@@ -1246,63 +1246,242 @@ export async function generateMoveCaseTasks(caseId: string) {
   try {
     await client.query('BEGIN');
 
-    const context = await loadMoveCaseContext(client, caseId);
-    const answerContextValues = await loadAnswerContextValues(client, caseId);
+    let context: MoveCaseContext;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadMoveCaseContext',
+      });
+      context = await loadMoveCaseContext(client, caseId);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadMoveCaseContext',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
+    let answerContextValues: Record<string, unknown>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadAnswerContextValues',
+      });
+      answerContextValues = await loadAnswerContextValues(client, caseId);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadAnswerContextValues',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
     context.values = {
       ...context.values,
       ...answerContextValues,
     };
-    const templates = await loadTemplates(client);
+
+    let templates: MoveTaskTemplateRow[];
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadTemplates',
+      });
+      templates = await loadTemplates(client);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadTemplates',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
     const templateIds = templates.map((template) => String(template.id));
 
-    const [rulesByTemplateId, capabilitiesByTemplateId, linksByTemplateId, existingTaskData] =
-      await Promise.all([
-        loadRulesByTemplateId(client),
-        loadCapabilitiesByTemplateId(client),
-        loadLinksByTemplateId(client, templateIds),
-        loadExistingTasks(client, caseId),
-      ]);
+    let rulesByTemplateId: Awaited<ReturnType<typeof loadRulesByTemplateId>>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadRulesByTemplateId',
+      });
+      rulesByTemplateId = await loadRulesByTemplateId(client);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadRulesByTemplateId',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
+    let capabilitiesByTemplateId: Awaited<ReturnType<typeof loadCapabilitiesByTemplateId>>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadCapabilitiesByTemplateId',
+      });
+      capabilitiesByTemplateId = await loadCapabilitiesByTemplateId(client);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadCapabilitiesByTemplateId',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
+    let linksByTemplateId: Awaited<ReturnType<typeof loadLinksByTemplateId>>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadLinksByTemplateId',
+      });
+      linksByTemplateId = await loadLinksByTemplateId(client, templateIds);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadLinksByTemplateId',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
+    let existingTaskData: Awaited<ReturnType<typeof loadExistingTasks>>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadExistingTasks',
+      });
+      existingTaskData = await loadExistingTasks(client, caseId);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadExistingTasks',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
+
     const taskTableColumns = await loadTableColumns(client, 'public', 'move_case_tasks');
 
     const serviceSlugs = templates
       .map((template) => asString(template.service_slug))
       .filter((slug): slug is string => Boolean(slug));
-    const servicesBySlug = await loadCityServicesBySlug(client, context.toCityId, serviceSlugs);
+
+    let servicesBySlug: Awaited<ReturnType<typeof loadCityServicesBySlug>>;
+    try {
+      console.info('[MOVE_TASK_GENERATOR_STEP]', {
+        caseId,
+        step: 'loadCityServicesBySlug',
+      });
+      servicesBySlug = await loadCityServicesBySlug(client, context.toCityId, serviceSlugs);
+    } catch (error) {
+      console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+        caseId,
+        step: 'loadCityServicesBySlug',
+        error: error instanceof Error ? error.message : String(error),
+        code:
+          typeof error === 'object' && error !== null && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '',
+        stack: error instanceof Error ? error.stack ?? null : null,
+      });
+      throw error;
+    }
 
     const relevantTemplateIds = new Set<string>();
 
+    console.info('[MOVE_TASK_GENERATOR_STEP]', {
+      caseId,
+      step: 'upsertMoveCaseTaskLoop',
+      templateCount: templates.length,
+    });
+
     for (const template of templates) {
-      if (template.requires_car === true && !context.hasCar) continue;
-      if (template.requires_children === true && !context.hasChildren) continue;
-      if (template.requires_dog === true && !context.hasDog) continue;
+      try {
+        if (template.requires_car === true && !context.hasCar) continue;
+        if (template.requires_children === true && !context.hasChildren) continue;
+        if (template.requires_dog === true && !context.hasDog) continue;
 
-      const rules = rulesByTemplateId.get(String(template.id)) ?? [];
-      if (!evaluateVisibilityRules(rules, context)) {
-        continue;
+        const rules = rulesByTemplateId.get(String(template.id)) ?? [];
+        if (!evaluateVisibilityRules(rules, context)) {
+          continue;
+        }
+
+        relevantTemplateIds.add(String(template.id));
+
+        const resolvedContext = resolveTaskContext(
+          template,
+          context,
+          servicesBySlug,
+          linksByTemplateId
+        );
+        const actions = mapCapabilitiesToActions(
+          capabilitiesByTemplateId.get(String(template.id)) ?? [],
+          resolvedContext
+        );
+        const taskRow = buildTaskRow(template, context, resolvedContext, actions);
+
+        await upsertMoveCaseTask(
+          client,
+          caseId,
+          taskRow,
+          existingTaskData.existingTasksByTemplateId,
+          existingTaskData.doneTemplateIds,
+          taskTableColumns
+        );
+      } catch (error) {
+        console.error('[MOVE_TASK_GENERATOR_STEP_ERROR]', {
+          caseId,
+          step: 'upsertMoveCaseTaskLoop',
+          templateId: template.id,
+          error: error instanceof Error ? error.message : String(error),
+          code:
+            typeof error === 'object' && error !== null && 'code' in error
+              ? String((error as { code?: unknown }).code ?? '')
+              : '',
+          stack: error instanceof Error ? error.stack ?? null : null,
+        });
+        throw error;
       }
-
-      relevantTemplateIds.add(String(template.id));
-
-      const resolvedContext = resolveTaskContext(
-        template,
-        context,
-        servicesBySlug,
-        linksByTemplateId
-      );
-      const actions = mapCapabilitiesToActions(
-        capabilitiesByTemplateId.get(String(template.id)) ?? [],
-        resolvedContext
-      );
-      const taskRow = buildTaskRow(template, context, resolvedContext, actions);
-
-      await upsertMoveCaseTask(
-        client,
-        caseId,
-        taskRow,
-        existingTaskData.existingTasksByTemplateId,
-        existingTaskData.doneTemplateIds,
-        taskTableColumns
-      );
     }
 
     for (const task of existingTaskData.existingTasks) {
@@ -1328,6 +1507,15 @@ export async function generateMoveCaseTasks(caseId: string) {
 
     await client.query('COMMIT');
   } catch (error) {
+    console.error('[MOVE_TASK_GENERATOR_FATAL]', {
+      caseId,
+      error: error instanceof Error ? error.message : String(error),
+      code:
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : '',
+      stack: error instanceof Error ? error.stack ?? null : null,
+    });
     await client.query('ROLLBACK');
     throw error;
   } finally {
