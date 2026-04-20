@@ -904,82 +904,65 @@ async function loadMoveCaseContext(client: PoolClient, caseId: string): Promise<
 }
 
 async function loadTemplates(client: PoolClient) {
-  try {
-    const result = await client.query<MoveTaskTemplateRow>(
-      `
-      SELECT
-        id,
-        category,
-        service_slug,
-        sort_order,
-        is_active,
-        requires_car,
-        requires_children,
-        requires_dog,
-        trigger_before_move_days,
-        trigger_after_move_days,
-        NULLIF(header_de, '') AS header_de,
-        NULLIF(header_fr, '') AS header_fr,
-        NULLIF(header_en, '') AS header_en,
-        NULLIF(title_de, '') AS title_de,
-        NULLIF(title_fr, '') AS title_fr,
-        NULLIF(title_en, '') AS title_en,
-        NULLIF(description_de, '') AS description_de,
-        NULLIF(description_fr, '') AS description_fr,
-        NULLIF(description_en, '') AS description_en
-      FROM move_task_templates
-      WHERE COALESCE(is_active, true) = true
-      ORDER BY COALESCE(sort_order, 0), created_at, id
-      `
-    );
+  const templateColumns = await loadTableColumns(client, 'public', 'move_task_templates');
 
-    return result.rows;
-  } catch (error) {
-    const code =
-      typeof error === 'object' && error !== null && 'code' in error
-        ? String((error as { code?: unknown }).code ?? '')
-        : '';
+  const serviceSlugSelect = templateColumns.has('service_slug')
+    ? 'service_slug'
+    : templateColumns.has('slug')
+      ? 'slug AS service_slug'
+      : 'NULL::text AS service_slug';
 
-    if (code !== '42703' && code !== '42P01') {
-      throw error;
-    }
+  const headerDeSelect = templateColumns.has('header_de')
+    ? "NULLIF(header_de, '') AS header_de"
+    : 'NULL::text AS header_de';
+  const headerFrSelect = templateColumns.has('header_fr')
+    ? "NULLIF(header_fr, '') AS header_fr"
+    : 'NULL::text AS header_fr';
+  const headerEnSelect = templateColumns.has('header_en')
+    ? "NULLIF(header_en, '') AS header_en"
+    : 'NULL::text AS header_en';
 
+  if (
+    !templateColumns.has('service_slug') ||
+    !templateColumns.has('header_de') ||
+    !templateColumns.has('header_fr') ||
+    !templateColumns.has('header_en')
+  ) {
     warnSchemaFallback(
       'move_task_templates_legacy_columns',
-      'move_task_templates is missing newer columns; generator falls back to legacy template fields.',
-      error
+      'move_task_templates is missing newer columns; generator falls back to legacy template fields.'
     );
-
-    const fallbackResult = await client.query<MoveTaskTemplateRow>(
-      `
-      SELECT
-        id,
-        category,
-        NULL::text AS service_slug,
-        sort_order,
-        is_active,
-        requires_car,
-        requires_children,
-        requires_dog,
-        trigger_before_move_days,
-        trigger_after_move_days,
-        NULL::text AS header_de,
-        NULL::text AS header_fr,
-        NULL::text AS header_en,
-        NULLIF(title_de, '') AS title_de,
-        NULLIF(title_fr, '') AS title_fr,
-        NULLIF(title_en, '') AS title_en,
-        NULLIF(description_de, '') AS description_de,
-        NULLIF(description_fr, '') AS description_fr,
-        NULLIF(description_en, '') AS description_en
-      FROM move_task_templates
-      WHERE COALESCE(is_active, true) = true
-      ORDER BY COALESCE(sort_order, 0), created_at, id
-      `
-    );
-
-    return fallbackResult.rows;
   }
+
+  const result = await client.query<MoveTaskTemplateRow>(
+    `
+    SELECT
+      id,
+      category,
+      ${serviceSlugSelect},
+      sort_order,
+      is_active,
+      requires_car,
+      requires_children,
+      requires_dog,
+      trigger_before_move_days,
+      trigger_after_move_days,
+      ${headerDeSelect},
+      ${headerFrSelect},
+      ${headerEnSelect},
+      NULLIF(title_de, '') AS title_de,
+      NULLIF(title_fr, '') AS title_fr,
+      NULLIF(title_en, '') AS title_en,
+      NULLIF(description_de, '') AS description_de,
+      NULLIF(description_fr, '') AS description_fr,
+      NULLIF(description_en, '') AS description_en
+    FROM move_task_templates
+    WHERE COALESCE(is_active, true) = true
+    ORDER BY COALESCE(sort_order, 0), created_at, id
+    `
+  );
+
+  return result.rows;
 }
 
 async function loadRulesByTemplateId(client: PoolClient) {
