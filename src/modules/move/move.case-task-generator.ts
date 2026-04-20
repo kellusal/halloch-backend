@@ -1115,14 +1115,26 @@ async function loadLinksByTemplateId(client: PoolClient, templateIds: string[]) 
 
 async function loadAnswerContextValues(client: PoolClient, caseId: string) {
   try {
+    const answerColumns = await loadTableColumns(client, 'public', 'move_case_task_answers');
+
+    const valueJsonSelect = answerColumns.has('value_json')
+      ? 'a.value_json'
+      : 'NULL::jsonb AS value_json';
+    const answerTextSelect = answerColumns.has('answer_text')
+      ? 'a.answer_text'
+      : 'NULL::text AS answer_text';
+    const valueTextSelect = answerColumns.has('value_text')
+      ? 'a.value_text'
+      : 'NULL::text AS value_text';
+
     const result = await client.query<MoveCaseAnswerContextRow>(
       `
       SELECT
         a.question_key,
         a.answer_json,
-        a.value_json,
-        a.answer_text,
-        a.value_text
+        ${valueJsonSelect},
+        ${answerTextSelect},
+        ${valueTextSelect}
       FROM move_case_task_answers a
       INNER JOIN move_case_tasks t
         ON t.id = a.case_task_id
