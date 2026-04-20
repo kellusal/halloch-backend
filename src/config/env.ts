@@ -26,6 +26,8 @@ function parseOrigins(value: string): string[] {
     .filter(Boolean);
 }
 
+const REQUIRED_PROD_ORIGINS = ['https://app.halloch.ch', 'https://halloch.ch'];
+
 const DEV_ORIGINS = [
   'http://localhost:8081',
   'http://127.0.0.1:8081',
@@ -43,10 +45,13 @@ const JWT_EXPIRES_IN = readString('JWT_EXPIRES_IN', '7d');
 const configuredOrigins = parseOrigins(
   readString('FRONTEND_ORIGINS', 'http://localhost:8081,http://127.0.0.1:8081')
 );
+const mergedConfiguredOrigins = Array.from(
+  new Set([...configuredOrigins, ...REQUIRED_PROD_ORIGINS])
+);
 const FRONTEND_ORIGINS =
   NODE_ENV === 'production'
-    ? configuredOrigins
-    : Array.from(new Set([...configuredOrigins, ...DEV_ORIGINS]));
+    ? mergedConfiguredOrigins
+    : Array.from(new Set([...mergedConfiguredOrigins, ...DEV_ORIGINS]));
 const RATE_LIMIT_WINDOW_MS = readNumber('RATE_LIMIT_WINDOW_MS', 15 * 60 * 1000);
 const RATE_LIMIT_MAX = readNumber('RATE_LIMIT_MAX', 300);
 const AUTH_RATE_LIMIT_MAX = readNumber('AUTH_RATE_LIMIT_MAX', 25);

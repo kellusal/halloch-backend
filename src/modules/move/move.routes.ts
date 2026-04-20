@@ -2,6 +2,12 @@ import { Request, Response, Router } from 'express';
 import { pool } from '../../db/pool';
 import { sendInternalServerError } from '../../middleware/error.middleware';
 import { requireAuth } from '../../middleware/requireAuth';
+import {
+  completeMoveCaseTask,
+  executeMoveCaseTaskAction,
+  getMoveCaseTaskDetail,
+  saveMoveCaseTaskAnswers,
+} from './move.services';
 import { refreshMoveCaseTasks } from './move.task-sync';
 
 const router = Router();
@@ -747,6 +753,7 @@ router.get('/cases/:caseId/tasks', requireAuth, async (req: Request, res: Respon
         updated_at
       FROM move_case_tasks
       WHERE case_id = $1
+        AND status <> 'hidden'
       ORDER BY sort_order ASC, created_at ASC
       `,
       [caseId]
@@ -765,8 +772,17 @@ router.get(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const { caseId, taskId } = req.params;
+      const rawCaseId = req.params.caseId;
+      const rawTaskId = req.params.taskId;
+      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
+      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
       const userId = req.user?.id;
+
+      if (!caseId || !taskId) {
+        return res.status(400).json({
+          message: 'Case id und task id sind erforderlich.',
+        });
+      }
 
       if (!userId) {
         return res.status(401).json({
@@ -774,107 +790,138 @@ router.get(
         });
       }
 
-      const caseCheck = await pool.query<IdRow>(
-        `
-        SELECT id
-        FROM move_cases
-        WHERE id = $1
-          AND user_id = $2
-        LIMIT 1
-        `,
-        [caseId, userId]
-      );
+      const detail = await getMoveCaseTaskDetail(caseId, taskId, userId);
 
-      if (!caseCheck.rows[0]) {
-        return res.status(404).json({
-          message: 'Umzugsfall nicht gefunden.',
-        });
-      }
-
-      const taskResult = await pool.query(
-        `
-        SELECT
-          id,
-          case_id,
-          template_id,
-          city_service_id,
-          category,
-
-          header,
-          header_de,
-          header_fr,
-          header_en,
-
-          title,
-          title_de,
-          title_fr,
-          title_en,
-
-          description,
-          description_de,
-          description_fr,
-          description_en,
-
-          status,
-          due_date,
-          sort_order,
-          external_url,
-          link_label,
-          is_required,
-          is_city_specific,
-          action_type,
-          action_payload,
-          secondary_action_type,
-          secondary_action_payload,
-          action_status,
-          completed_at,
-          created_at,
-          updated_at
-        FROM move_case_tasks
-        WHERE id = $1
-          AND case_id = $2
-        LIMIT 1
-        `,
-        [taskId, caseId]
-      );
-
-      if (!taskResult.rows[0]) {
-        return res.status(404).json({
-          message: 'Aufgabe nicht gefunden.',
-        });
-      }
-
-      const nextTaskResult = await pool.query<IdRow>(
-        `
-        SELECT id
-        FROM move_case_tasks
-        WHERE case_id = $1
-          AND status = 'open'
-          AND (
-            sort_order > COALESCE(
-              (SELECT sort_order FROM move_case_tasks WHERE id = $2),
-              -1
-            )
-            OR (
-              sort_order = COALESCE(
-                (SELECT sort_order FROM move_case_tasks WHERE id = $2),
-                -1
-              )
-              AND id <> $2
-            )
-          )
-        ORDER BY sort_order ASC, created_at ASC
-        LIMIT 1
-        `,
-        [caseId, taskId]
-      );
-
-      return res.status(200).json({
-        task: taskResult.rows[0],
-        nextTaskId: nextTaskResult.rows[0]?.id ?? null,
-      });
+      return res.status(200).json(detail);
     } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === 'Move case not found') {
+          return res.status(404).json({
+            message: 'Umzugsfall nicht gefunden.',
+          });
+        }
+
+        if (error.message === 'Move task not found') {
+          return res.status(404).json({
+            message: 'Aufgabe nicht gefunden.',
+          });
+        }
+      }
+
       return sendInternalServerError(res, error, 'Error loading move task:');
+    }
+  }
+);
+
+router.put(
+  '/cases/:caseId/tasks/:taskId/answers',
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const rawCaseId = req.params.caseId;
+      const rawTaskId = req.params.taskId;
+      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
+      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
+      const userId = req.user?.id;
+      const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
+
+      if (!caseId || !taskId) {
+        return res.status(400).json({
+          message: 'Case id und task id sind erforderlich.',
+        });
+      }
+
+      if (!userId) {
+        return res.status(401).json({
+          message: 'Benutzer konnte nicht aus dem Token gelesen werden.',
+        });
+      }
+
+      const detail = await saveMoveCaseTaskAnswers(caseId, taskId, userId, answers);
+
+      return res.status(200).json(detail);
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === 'Answers are required') {
+          return res.status(400).json({
+            message: 'Mindestens eine Antwort ist erforderlich.',
+          });
+        }
+
+        if (error.message === 'Move task not found') {
+          return res.status(404).json({
+            message: 'Aufgabe nicht gefunden.',
+          });
+        }
+      }
+
+      return sendInternalServerError(res, error, 'Error saving move task answers:');
+    }
+  }
+);
+
+router.post(
+  '/cases/:caseId/tasks/:taskId/actions/:actionType',
+  requireAuth,
+  async (req: Request, res: Response) => {
+    try {
+      const rawCaseId = req.params.caseId;
+      const rawTaskId = req.params.taskId;
+      const rawActionType = req.params.actionType;
+      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
+      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
+      const actionType =
+        typeof rawActionType === 'string' ? rawActionType : rawActionType?.[0];
+      const userId = req.user?.id;
+
+      if (!caseId || !taskId || !actionType) {
+        return res.status(400).json({
+          message: 'Case id, task id und action type sind erforderlich.',
+        });
+      }
+
+      if (!userId) {
+        return res.status(401).json({
+          message: 'Benutzer konnte nicht aus dem Token gelesen werden.',
+        });
+      }
+
+      const result = await executeMoveCaseTaskAction(
+        caseId,
+        taskId,
+        actionType,
+        userId
+      );
+
+      return res.status(200).json(result);
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message === 'Unsupported move task action') {
+          return res.status(400).json({
+            message: 'Action-Type wird nicht unterstützt.',
+          });
+        }
+
+        if (
+          error.message === 'Move task not found' ||
+          error.message === 'Move case not found'
+        ) {
+          return res.status(404).json({
+            message: 'Aufgabe nicht gefunden.',
+          });
+        }
+
+        if (
+          error.message === 'Move task action not available' ||
+          error.message === 'Move task action payload invalid'
+        ) {
+          return res.status(400).json({
+            message: 'Die gewünschte Aktion ist für diese Aufgabe nicht verfügbar.',
+          });
+        }
+      }
+
+      return sendInternalServerError(res, error, 'Error executing move task action:');
     }
   }
 );
@@ -884,8 +931,17 @@ router.patch(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const { caseId, taskId } = req.params;
+      const rawCaseId = req.params.caseId;
+      const rawTaskId = req.params.taskId;
+      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
+      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
       const userId = req.user?.id;
+
+      if (!caseId || !taskId) {
+        return res.status(400).json({
+          message: 'Case id und task id sind erforderlich.',
+        });
+      }
 
       if (!userId) {
         return res.status(401).json({
@@ -893,98 +949,24 @@ router.patch(
         });
       }
 
-      const caseCheck = await pool.query<IdRow>(
-        `
-        SELECT id
-        FROM move_cases
-        WHERE id = $1
-          AND user_id = $2
-        LIMIT 1
-        `,
-        [caseId, userId]
-      );
-
-      if (!caseCheck.rows[0]) {
-        return res.status(404).json({
-          message: 'Umzugsfall nicht gefunden.',
-        });
-      }
-
-      const updateResult = await pool.query(
-        `
-        UPDATE move_case_tasks
-        SET
-          status = 'done',
-          completed_at = NOW(),
-          updated_at = NOW()
-        WHERE id = $1
-          AND case_id = $2
-        RETURNING
-          id,
-          case_id,
-          template_id,
-          city_service_id,
-          category,
-
-          header,
-          header_de,
-          header_fr,
-          header_en,
-
-          title,
-          title_de,
-          title_fr,
-          title_en,
-
-          description,
-          description_de,
-          description_fr,
-          description_en,
-
-          status,
-          due_date,
-          sort_order,
-          external_url,
-          link_label,
-          is_required,
-          is_city_specific,
-          action_type,
-          action_payload,
-          secondary_action_type,
-          secondary_action_payload,
-          action_status,
-          completed_at,
-          created_at,
-          updated_at
-        `,
-        [taskId, caseId]
-      );
-
-      if (!updateResult.rows[0]) {
-        return res.status(404).json({
-          message: 'Aufgabe nicht gefunden.',
-        });
-      }
-
-      await refreshMoveCaseTasks(caseId as string);
-
-      const nextTaskResult = await pool.query<IdRow>(
-        `
-        SELECT id
-        FROM move_case_tasks
-        WHERE case_id = $1
-          AND status = 'open'
-        ORDER BY sort_order ASC, created_at ASC
-        LIMIT 1
-        `,
-        [caseId]
-      );
+      const result = await completeMoveCaseTask(caseId, taskId, userId);
 
       return res.status(200).json({
-        task: updateResult.rows[0],
-        nextTaskId: nextTaskResult.rows[0]?.id ?? null,
+        task: result.task,
+        nextTaskId: result.nextTaskId,
       });
     } catch (error) {
+      if (error instanceof Error) {
+        if (
+          error.message === 'Move task not found' ||
+          error.message === 'Move case not found'
+        ) {
+          return res.status(404).json({
+            message: 'Aufgabe nicht gefunden.',
+          });
+        }
+      }
+
       return sendInternalServerError(
         res,
         error,

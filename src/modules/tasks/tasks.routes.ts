@@ -127,8 +127,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           created_at
         FROM move_case_tasks
         WHERE case_id = $1
+          AND status <> 'hidden'
         ORDER BY
-          CASE WHEN status = 'open' THEN 0 ELSE 1 END,
+          CASE WHEN status IN ('open', 'in_progress') THEN 0 ELSE 1 END,
           sort_order ASC,
           due_date ASC NULLS LAST,
           created_at ASC
@@ -137,7 +138,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
       );
 
       const moduleTasks = moduleTasksResult.rows;
-      const openTasks = moduleTasks.filter((task) => task.status === 'open');
+      const openTasks = moduleTasks.filter(
+        (task) => task.status === 'open' || task.status === 'in_progress'
+      );
       const doneModuleTasks = moduleTasks.filter((task) => task.status === 'done');
 
       const progress =

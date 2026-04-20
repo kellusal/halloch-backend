@@ -1,4 +1,5 @@
-﻿import 'dotenv/config';
+import 'dotenv/config';
+import cors, { type CorsOptionsDelegate } from 'cors';
 import express from 'express';
 import { env } from './config/env';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
@@ -11,23 +12,21 @@ const app = express();
 
 const allowedOrigins = env.FRONTEND_ORIGINS;
 
-app.use((req, res, next) => {
-  const origin = req.headers.origin;
+const corsOptionsDelegate: CorsOptionsDelegate = (req, callback) => {
+  const requestOrigin =
+    typeof req.headers.origin === 'string' ? req.headers.origin : undefined;
+  const isAllowedOrigin = !requestOrigin || allowedOrigins.includes(requestOrigin);
 
-  res.header('Vary', 'Origin');
-  res.header('Access-Control-Allow-Methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
-  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  callback(null, {
+    origin: isAllowedOrigin,
+    methods: ['GET', 'POST', 'PATCH', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+    optionsSuccessStatus: 204,
+  });
+};
 
-  if (origin && allowedOrigins.includes(origin)) {
-    res.header('Access-Control-Allow-Origin', origin);
-  }
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
-  return next();
-});
+app.use(cors(corsOptionsDelegate));
+app.options(/.*/, cors(corsOptionsDelegate));
 
 app.use(express.json());
 
