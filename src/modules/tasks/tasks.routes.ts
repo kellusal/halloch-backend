@@ -121,8 +121,6 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           status,
           due_date,
           sort_order,
-          external_url,
-          link_label,
           completed_at,
           created_at
         FROM move_case_tasks

@@ -2,6 +2,7 @@ import 'dotenv/config';
 import cors, { type CorsOptionsDelegate } from 'cors';
 import express from 'express';
 import { env } from './config/env';
+import { pool } from './db/pool';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
 import authRouter from './modules/auth/auth.routes';
 import moveRouter from './modules/move/move.routes';
@@ -30,8 +31,25 @@ app.options(/.*/, cors(corsOptionsDelegate));
 
 app.use(express.json());
 
-app.get('/health', (_req, res) => {
-  res.status(200).json({ ok: true });
+app.get('/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+
+    res.status(200).json({
+      ok: true,
+      db: 'ok',
+    });
+  } catch (error) {
+    console.error('[HEALTHCHECK_ERROR]', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack ?? null : null,
+    });
+
+    res.status(503).json({
+      ok: false,
+      db: 'error',
+    });
+  }
 });
 
 app.use('/auth', authRouter);

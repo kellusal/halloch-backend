@@ -2,6 +2,15 @@ import { NextFunction, Request, Response } from 'express';
 import { AppError } from '../../middleware/error.middleware';
 import * as authService from './auth.service';
 
+function logAuthError(event: string, req: Request, error: unknown) {
+  console.error(event, {
+    route: `${req.method} ${req.originalUrl}`,
+    userId: req.user?.id ?? null,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack ?? null : null,
+  });
+}
+
 function mapAuthError(error: unknown) {
   const message =
     error instanceof Error ? error.message : 'Internal server error';
@@ -62,8 +71,14 @@ export async function login(
       password: req.body.password,
     });
 
+    console.info('[AUTH_LOGIN_SUCCESS]', {
+      route: `${req.method} ${req.originalUrl}`,
+      userId: result.user.id,
+    });
+
     return res.status(200).json(result);
   } catch (error) {
+    logAuthError('[AUTH_LOGIN_ERROR]', req, error);
     return next(mapAuthError(error));
   }
 }
@@ -77,6 +92,7 @@ export async function me(req: Request, res: Response, next: NextFunction) {
     const result = await authService.getMe(Number(req.user.id));
     return res.status(200).json(result);
   } catch (error) {
+    logAuthError('[AUTH_ME_ERROR]', req, error);
     return next(mapAuthError(error));
   }
 }

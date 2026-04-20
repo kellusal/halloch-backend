@@ -264,6 +264,33 @@ function toArray(value: unknown): unknown[] {
   return [parsed];
 }
 
+async function loadTableColumns(
+  client: { query: PoolClient['query'] },
+  schemaName: string,
+  tableName: string
+) {
+  const result = await client.query<{ column_name: string }>(
+    `
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = $1
+      AND table_name = $2
+    `,
+    [schemaName, tableName]
+  );
+
+  const columns = new Set(result.rows.map((row) => row.column_name));
+
+  if (columns.size === 0) {
+    warnSchemaFallback(
+      `table-columns:${schemaName}.${tableName}`,
+      `No columns discovered for ${schemaName}.${tableName}; move task generator will degrade defensively.`
+    );
+  }
+
+  return columns;
+}
+
 function pickFirst(row: GenericRow, keys: string[]): unknown {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(row, key) && row[key] !== undefined) {
@@ -629,7 +656,8 @@ export async function upsertMoveCaseTask(
   caseId: string,
   task: GeneratedTaskRow,
   existingTasksByTemplateId: Map<string, ExistingTaskRow>,
-  doneTemplateIds: Set<string>
+  doneTemplateIds: Set<string>,
+  taskTableColumns: Set<string>
 ) {
   if (doneTemplateIds.has(task.templateId)) {
     return;
@@ -638,142 +666,136 @@ export async function upsertMoveCaseTask(
   const existingTask = existingTasksByTemplateId.get(task.templateId);
 
   if (existingTask && existingTask.status !== 'done') {
+    const updateAssignments: string[] = [];
+    const updateValues: unknown[] = [];
+
+    const addUpdate = (column: string, value: unknown) => {
+      if (!taskTableColumns.has(column)) return;
+      updateAssignments.push(`${column} = $${updateValues.length + 1}`);
+      updateValues.push(value);
+    };
+
+    if (taskTableColumns.has('status')) {
+      updateAssignments.push(
+        `status = CASE WHEN status = 'in_progress' THEN 'in_progress' ELSE 'open' END`
+      );
+    }
+
+    addUpdate('city_service_id', task.cityServiceId);
+    addUpdate('category', task.category);
+    addUpdate(
+      'header',
+      localizedText('de', { de: task.headerDe, fr: task.headerFr, en: task.headerEn })
+    );
+    addUpdate('header_de', task.headerDe);
+    addUpdate('header_fr', task.headerFr);
+    addUpdate('header_en', task.headerEn);
+    addUpdate('title', task.title);
+    addUpdate('title_de', task.titleDe);
+    addUpdate('title_fr', task.titleFr);
+    addUpdate('title_en', task.titleEn);
+    addUpdate('description', task.description);
+    addUpdate('description_de', task.descriptionDe);
+    addUpdate('description_fr', task.descriptionFr);
+    addUpdate('description_en', task.descriptionEn);
+    addUpdate('due_date', task.dueDate);
+    addUpdate('sort_order', task.sortOrder);
+    addUpdate('external_url', task.externalUrl);
+    addUpdate('link_label', task.linkLabel);
+    addUpdate('is_required', task.isRequired);
+    addUpdate('is_city_specific', task.isCitySpecific);
+    addUpdate('action_type', task.actionType);
+    addUpdate('action_payload', task.actionPayload);
+    addUpdate('secondary_action_type', task.secondaryActionType);
+    addUpdate('secondary_action_payload', task.secondaryActionPayload);
+
+    if (taskTableColumns.has('action_status')) {
+      updateAssignments.push(`action_status = COALESCE(action_status, 'pending')`);
+    }
+
+    if (taskTableColumns.has('updated_at')) {
+      updateAssignments.push('updated_at = NOW()');
+    }
+
+    if (updateAssignments.length === 0) {
+      warnSchemaFallback(
+        'move_case_tasks_update_columns',
+        'move_case_tasks has no updatable known columns; existing task row is left unchanged.'
+      );
+      return;
+    }
+
     await client.query(
       `
       UPDATE move_case_tasks
       SET
-        status = CASE
-          WHEN status = 'in_progress' THEN 'in_progress'
-          ELSE 'open'
-        END,
-        city_service_id = $1,
-        category = $2,
-        header = $3,
-        header_de = $4,
-        header_fr = $5,
-        header_en = $6,
-        title = $7,
-        title_de = $8,
-        title_fr = $9,
-        title_en = $10,
-        description = $11,
-        description_de = $12,
-        description_fr = $13,
-        description_en = $14,
-        due_date = $15,
-        sort_order = $16,
-        external_url = $17,
-        link_label = $18,
-        is_required = $19,
-        is_city_specific = $20,
-        action_type = $21,
-        action_payload = $22,
-        secondary_action_type = $23,
-        secondary_action_payload = $24,
-        action_status = COALESCE(action_status, 'pending'),
-        updated_at = NOW()
-      WHERE id = $25
+        ${updateAssignments.join(',\n        ')}
+      WHERE id = $${updateValues.length + 1}
       `,
-      [
-        task.cityServiceId,
-        task.category,
-        localizedText('de', { de: task.headerDe, fr: task.headerFr, en: task.headerEn }),
-        task.headerDe,
-        task.headerFr,
-        task.headerEn,
-        task.title,
-        task.titleDe,
-        task.titleFr,
-        task.titleEn,
-        task.description,
-        task.descriptionDe,
-        task.descriptionFr,
-        task.descriptionEn,
-        task.dueDate,
-        task.sortOrder,
-        task.externalUrl,
-        task.linkLabel,
-        task.isRequired,
-        task.isCitySpecific,
-        task.actionType,
-        task.actionPayload,
-        task.secondaryActionType,
-        task.secondaryActionPayload,
-        existingTask.id,
-      ]
+      [...updateValues, existingTask.id]
     );
     return;
   }
 
+  const insertColumns: string[] = [];
+  const insertValues: unknown[] = [];
+
+  const addInsert = (column: string, value: unknown) => {
+    if (!taskTableColumns.has(column)) return;
+    insertColumns.push(column);
+    insertValues.push(value);
+  };
+
+  addInsert('case_id', caseId);
+  addInsert('template_id', task.templateId);
+  addInsert('city_service_id', task.cityServiceId);
+  addInsert('category', task.category);
+  addInsert(
+    'header',
+    localizedText('de', { de: task.headerDe, fr: task.headerFr, en: task.headerEn })
+  );
+  addInsert('header_de', task.headerDe);
+  addInsert('header_fr', task.headerFr);
+  addInsert('header_en', task.headerEn);
+  addInsert('title', task.title);
+  addInsert('title_de', task.titleDe);
+  addInsert('title_fr', task.titleFr);
+  addInsert('title_en', task.titleEn);
+  addInsert('description', task.description);
+  addInsert('description_de', task.descriptionDe);
+  addInsert('description_fr', task.descriptionFr);
+  addInsert('description_en', task.descriptionEn);
+  addInsert('status', 'open');
+  addInsert('due_date', task.dueDate);
+  addInsert('sort_order', task.sortOrder);
+  addInsert('external_url', task.externalUrl);
+  addInsert('link_label', task.linkLabel);
+  addInsert('is_required', task.isRequired);
+  addInsert('is_city_specific', task.isCitySpecific);
+  addInsert('action_type', task.actionType);
+  addInsert('action_payload', task.actionPayload);
+  addInsert('secondary_action_type', task.secondaryActionType);
+  addInsert('secondary_action_payload', task.secondaryActionPayload);
+  addInsert('action_status', 'pending');
+
+  if (!taskTableColumns.has('case_id') || !taskTableColumns.has('template_id')) {
+    throw new Error(
+      'move_case_tasks schema is incompatible: required columns case_id/template_id are missing'
+    );
+  }
+
+  const placeholders = insertColumns.map((_, index) => `$${index + 1}`);
+
   await client.query(
     `
     INSERT INTO move_case_tasks (
-      case_id,
-      template_id,
-      city_service_id,
-      category,
-      header,
-      header_de,
-      header_fr,
-      header_en,
-      title,
-      title_de,
-      title_fr,
-      title_en,
-      description,
-      description_de,
-      description_fr,
-      description_en,
-      status,
-      due_date,
-      sort_order,
-      external_url,
-      link_label,
-      is_required,
-      is_city_specific,
-      action_type,
-      action_payload,
-      secondary_action_type,
-      secondary_action_payload,
-      action_status
+      ${insertColumns.join(', ')}
     )
     VALUES (
-      $1, $2, $3, $4,
-      $5, $6, $7, $8,
-      $9, $10, $11, $12,
-      $13, $14, $15, $16,
-      'open', $17, $18, $19, $20, $21, $22,
-      $23, $24, $25, $26, 'pending'
+      ${placeholders.join(', ')}
     )
     `,
-    [
-      caseId,
-      task.templateId,
-      task.cityServiceId,
-      task.category,
-      localizedText('de', { de: task.headerDe, fr: task.headerFr, en: task.headerEn }),
-      task.headerDe,
-      task.headerFr,
-      task.headerEn,
-      task.title,
-      task.titleDe,
-      task.titleFr,
-      task.titleEn,
-      task.description,
-      task.descriptionDe,
-      task.descriptionFr,
-      task.descriptionEn,
-      task.dueDate,
-      task.sortOrder,
-      task.externalUrl,
-      task.linkLabel,
-      task.isRequired,
-      task.isCitySpecific,
-      task.actionType,
-      task.actionPayload,
-      task.secondaryActionType,
-      task.secondaryActionPayload,
-    ]
+    insertValues
   );
 }
 
@@ -882,35 +904,82 @@ async function loadMoveCaseContext(client: PoolClient, caseId: string): Promise<
 }
 
 async function loadTemplates(client: PoolClient) {
-  const result = await client.query<MoveTaskTemplateRow>(
-    `
-    SELECT
-      id,
-      category,
-      service_slug,
-      sort_order,
-      is_active,
-      requires_car,
-      requires_children,
-      requires_dog,
-      trigger_before_move_days,
-      trigger_after_move_days,
-      NULLIF(header_de, '') AS header_de,
-      NULLIF(header_fr, '') AS header_fr,
-      NULLIF(header_en, '') AS header_en,
-      NULLIF(title_de, '') AS title_de,
-      NULLIF(title_fr, '') AS title_fr,
-      NULLIF(title_en, '') AS title_en,
-      NULLIF(description_de, '') AS description_de,
-      NULLIF(description_fr, '') AS description_fr,
-      NULLIF(description_en, '') AS description_en
-    FROM move_task_templates
-    WHERE COALESCE(is_active, true) = true
-    ORDER BY COALESCE(sort_order, 0), created_at, id
-    `
-  );
+  try {
+    const result = await client.query<MoveTaskTemplateRow>(
+      `
+      SELECT
+        id,
+        category,
+        service_slug,
+        sort_order,
+        is_active,
+        requires_car,
+        requires_children,
+        requires_dog,
+        trigger_before_move_days,
+        trigger_after_move_days,
+        NULLIF(header_de, '') AS header_de,
+        NULLIF(header_fr, '') AS header_fr,
+        NULLIF(header_en, '') AS header_en,
+        NULLIF(title_de, '') AS title_de,
+        NULLIF(title_fr, '') AS title_fr,
+        NULLIF(title_en, '') AS title_en,
+        NULLIF(description_de, '') AS description_de,
+        NULLIF(description_fr, '') AS description_fr,
+        NULLIF(description_en, '') AS description_en
+      FROM move_task_templates
+      WHERE COALESCE(is_active, true) = true
+      ORDER BY COALESCE(sort_order, 0), created_at, id
+      `
+    );
 
-  return result.rows;
+    return result.rows;
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : '';
+
+    if (code !== '42703' && code !== '42P01') {
+      throw error;
+    }
+
+    warnSchemaFallback(
+      'move_task_templates_legacy_columns',
+      'move_task_templates is missing newer columns; generator falls back to legacy template fields.',
+      error
+    );
+
+    const fallbackResult = await client.query<MoveTaskTemplateRow>(
+      `
+      SELECT
+        id,
+        category,
+        NULL::text AS service_slug,
+        sort_order,
+        is_active,
+        requires_car,
+        requires_children,
+        requires_dog,
+        trigger_before_move_days,
+        trigger_after_move_days,
+        NULL::text AS header_de,
+        NULL::text AS header_fr,
+        NULL::text AS header_en,
+        NULLIF(title_de, '') AS title_de,
+        NULLIF(title_fr, '') AS title_fr,
+        NULLIF(title_en, '') AS title_en,
+        NULLIF(description_de, '') AS description_de,
+        NULLIF(description_fr, '') AS description_fr,
+        NULLIF(description_en, '') AS description_en
+      FROM move_task_templates
+      WHERE COALESCE(is_active, true) = true
+      ORDER BY COALESCE(sort_order, 0), created_at, id
+      `
+    );
+
+    return fallbackResult.rows;
+  }
 }
 
 async function loadRulesByTemplateId(client: PoolClient) {
@@ -990,27 +1059,69 @@ async function loadCapabilitiesByTemplateId(client: PoolClient) {
 async function loadLinksByTemplateId(client: PoolClient, templateIds: string[]) {
   if (templateIds.length === 0) return new Map<string, TemplateLinkRow[]>();
 
-  const result = await client.query<TemplateLinkRow>(
-    `
-    SELECT
-      task_template_id,
-      city_id,
-      canton_id,
-      language_code,
-      label_de,
-      label_fr,
-      label_en,
-      url,
-      sort_order,
-      is_active
-    FROM move_task_template_links
-    WHERE task_template_id = ANY($1::uuid[])
-    `,
-    [templateIds]
-  );
+  let rows: TemplateLinkRow[] = [];
+
+  try {
+    const result = await client.query<TemplateLinkRow>(
+      `
+      SELECT
+        task_template_id,
+        city_id,
+        canton_id,
+        language_code,
+        label_de,
+        label_fr,
+        label_en,
+        url,
+        sort_order,
+        is_active
+      FROM move_task_template_links
+      WHERE task_template_id = ANY($1::uuid[])
+      `,
+      [templateIds]
+    );
+
+    rows = result.rows;
+  } catch (error) {
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : '';
+
+    if (code !== '42P01' && code !== '42703') {
+      throw error;
+    }
+
+    warnSchemaFallback(
+      'move_task_template_links_legacy_table',
+      'move_task_template_links is unavailable; generator falls back to legacy move_task_links.',
+      error
+    );
+
+    const fallbackResult = await client.query<TemplateLinkRow>(
+      `
+      SELECT
+        task_template_id,
+        city_id,
+        canton_id,
+        language_code,
+        label_de,
+        label_fr,
+        label_en,
+        url,
+        sort_order,
+        is_active
+      FROM move_task_links
+      WHERE task_template_id = ANY($1::uuid[])
+      `,
+      [templateIds]
+    );
+
+    rows = fallbackResult.rows;
+  }
 
   const grouped = new Map<string, TemplateLinkRow[]>();
-  for (const row of result.rows) {
+  for (const row of rows) {
     const key = String(row.task_template_id);
     const list = grouped.get(key) ?? [];
     list.push(row);
@@ -1156,6 +1267,7 @@ export async function generateMoveCaseTasks(caseId: string) {
         loadLinksByTemplateId(client, templateIds),
         loadExistingTasks(client, caseId),
       ]);
+    const taskTableColumns = await loadTableColumns(client, 'public', 'move_case_tasks');
 
     const serviceSlugs = templates
       .map((template) => asString(template.service_slug))
@@ -1193,7 +1305,8 @@ export async function generateMoveCaseTasks(caseId: string) {
         caseId,
         taskRow,
         existingTaskData.existingTasksByTemplateId,
-        existingTaskData.doneTemplateIds
+        existingTaskData.doneTemplateIds,
+        taskTableColumns
       );
     }
 

@@ -588,6 +588,19 @@ async function loadTableColumns(
   return columns;
 }
 
+function selectColumn(
+  columns: Set<string>,
+  alias: string,
+  columnName: string,
+  fallbackType: 'text' | 'boolean' | 'jsonb' | 'uuid' | 'integer' | 'timestamp'
+) {
+  if (columns.has(columnName)) {
+    return `${alias}.${columnName}`;
+  }
+
+  return `NULL::${fallbackType} AS ${columnName}`;
+}
+
 function toJsonValue(value: unknown): unknown {
   if (value === undefined) return null;
   return value;
@@ -648,61 +661,70 @@ async function loadOwnedMoveTaskRow(
   taskId: string,
   userId: number | string
 ) {
+  const [taskColumns, cityServiceColumns] = await Promise.all([
+    loadTableColumns(client, 'public', 'move_case_tasks'),
+    loadTableColumns(client, 'public', 'move_city_services'),
+  ]);
+
+  const cityServiceJoin =
+    taskColumns.has('city_service_id') && cityServiceColumns.has('id')
+      ? 'LEFT JOIN public.move_city_services cs ON cs.id = t.city_service_id'
+      : '';
+
   const taskResult = await client.query<MoveCaseTaskDetailRow & CityServiceDetailRow>(
     `
       SELECT
         t.id,
         t.case_id,
-        t.template_id,
-        t.city_service_id,
-        t.category,
+        ${selectColumn(taskColumns, 't', 'template_id', 'uuid')},
+        ${selectColumn(taskColumns, 't', 'city_service_id', 'uuid')},
+        ${selectColumn(taskColumns, 't', 'category', 'text')},
 
-        t.header,
-        t.header_de,
-        t.header_fr,
-        t.header_en,
+        ${selectColumn(taskColumns, 't', 'header', 'text')},
+        ${selectColumn(taskColumns, 't', 'header_de', 'text')},
+        ${selectColumn(taskColumns, 't', 'header_fr', 'text')},
+        ${selectColumn(taskColumns, 't', 'header_en', 'text')},
 
-        t.title,
-        t.description,
+        ${selectColumn(taskColumns, 't', 'title', 'text')},
+        ${selectColumn(taskColumns, 't', 'description', 'text')},
 
-        t.title_de,
-        t.title_fr,
-        t.title_en,
+        ${selectColumn(taskColumns, 't', 'title_de', 'text')},
+        ${selectColumn(taskColumns, 't', 'title_fr', 'text')},
+        ${selectColumn(taskColumns, 't', 'title_en', 'text')},
 
-        t.description_de,
-        t.description_fr,
-        t.description_en,
+        ${selectColumn(taskColumns, 't', 'description_de', 'text')},
+        ${selectColumn(taskColumns, 't', 'description_fr', 'text')},
+        ${selectColumn(taskColumns, 't', 'description_en', 'text')},
 
-        t.status,
-        t.due_date,
-        t.sort_order,
-        t.external_url,
-        t.link_label,
-        t.is_required,
-        t.is_city_specific,
+        ${selectColumn(taskColumns, 't', 'status', 'text')},
+        ${selectColumn(taskColumns, 't', 'due_date', 'text')},
+        ${selectColumn(taskColumns, 't', 'sort_order', 'integer')},
+        ${selectColumn(taskColumns, 't', 'external_url', 'text')},
+        ${selectColumn(taskColumns, 't', 'link_label', 'text')},
+        ${selectColumn(taskColumns, 't', 'is_required', 'boolean')},
+        ${selectColumn(taskColumns, 't', 'is_city_specific', 'boolean')},
 
-        t.action_type,
-        t.action_payload,
-        t.secondary_action_type,
-        t.secondary_action_payload,
-        t.action_status,
+        ${selectColumn(taskColumns, 't', 'action_type', 'text')},
+        ${selectColumn(taskColumns, 't', 'action_payload', 'jsonb')},
+        ${selectColumn(taskColumns, 't', 'secondary_action_type', 'text')},
+        ${selectColumn(taskColumns, 't', 'secondary_action_payload', 'jsonb')},
+        ${selectColumn(taskColumns, 't', 'action_status', 'text')},
 
-        t.completed_at,
-        t.created_at,
-        t.updated_at,
+        ${selectColumn(taskColumns, 't', 'completed_at', 'text')},
+        ${selectColumn(taskColumns, 't', 'created_at', 'text')},
+        ${selectColumn(taskColumns, 't', 'updated_at', 'text')},
 
-        cs.office_name,
-        cs.office_address,
-        cs.office_email,
-        cs.office_phone,
-        cs.website_url,
-        cs.online_available,
-        cs.appointment_required
+        ${selectColumn(cityServiceColumns, 'cs', 'office_name', 'text')},
+        ${selectColumn(cityServiceColumns, 'cs', 'office_address', 'text')},
+        ${selectColumn(cityServiceColumns, 'cs', 'office_email', 'text')},
+        ${selectColumn(cityServiceColumns, 'cs', 'office_phone', 'text')},
+        ${selectColumn(cityServiceColumns, 'cs', 'website_url', 'text')},
+        ${selectColumn(cityServiceColumns, 'cs', 'online_available', 'boolean')},
+        ${selectColumn(cityServiceColumns, 'cs', 'appointment_required', 'boolean')}
       FROM public.move_case_tasks t
       INNER JOIN public.move_cases mc
         ON mc.id = t.case_id
-      LEFT JOIN public.move_city_services cs
-        ON cs.id = t.city_service_id
+      ${cityServiceJoin}
       WHERE t.id = $1
         AND t.case_id = $2
         AND mc.user_id = $3
@@ -1120,7 +1142,7 @@ export async function getMoveCaseById(caseId: string, userId: number) {
   };
 }
 
-export async function getMoveCaseTasks(caseId: string, userId: number) {
+export async function getMoveCaseTasks(caseId: string, userId: number | string) {
   if (!caseId?.trim()) {
     throw new Error('Case id is required');
   }
@@ -1140,43 +1162,45 @@ export async function getMoveCaseTasks(caseId: string, userId: number) {
     throw new Error('Move case not found');
   }
 
+  const taskColumns = await loadTableColumns(pool, 'public', 'move_case_tasks');
+
   const result = await pool.query<MoveCaseTaskRow>(
     `
       SELECT
         id,
         case_id,
-        template_id,
-        city_service_id,
-        category,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'template_id', 'uuid')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'city_service_id', 'uuid')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'category', 'text')},
 
-        title,
-        description,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'title', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'description', 'text')},
 
-        title_de,
-        title_fr,
-        title_en,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'title_de', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'title_fr', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'title_en', 'text')},
 
-        description_de,
-        description_fr,
-        description_en,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'description_de', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'description_fr', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'description_en', 'text')},
 
-        status,
-        due_date,
-        sort_order,
-        external_url,
-        link_label,
-        is_required,
-        is_city_specific,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'status', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'due_date', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'sort_order', 'integer')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'external_url', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'link_label', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'is_required', 'boolean')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'is_city_specific', 'boolean')},
 
-        action_type,
-        action_payload,
-        secondary_action_type,
-        secondary_action_payload,
-        action_status,
+        ${selectColumn(taskColumns, 'move_case_tasks', 'action_type', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'action_payload', 'jsonb')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'secondary_action_type', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'secondary_action_payload', 'jsonb')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'action_status', 'text')},
 
-        completed_at,
-        created_at,
-        updated_at
+        ${selectColumn(taskColumns, 'move_case_tasks', 'completed_at', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'created_at', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'updated_at', 'text')}
       FROM public.move_case_tasks
       WHERE case_id = $1
         AND status <> 'hidden'
@@ -1218,71 +1242,7 @@ export async function getMoveCaseTaskDetail(
     throw new Error('Move case not found');
   }
 
-  const taskResult = await pool.query<MoveCaseTaskDetailRow & CityServiceDetailRow>(
-    `
-      SELECT
-        t.id,
-        t.case_id,
-        t.template_id,
-        t.city_service_id,
-        t.category,
-
-        t.header,
-        t.header_de,
-        t.header_fr,
-        t.header_en,
-
-        t.title,
-        t.description,
-
-        t.title_de,
-        t.title_fr,
-        t.title_en,
-
-        t.description_de,
-        t.description_fr,
-        t.description_en,
-
-        t.status,
-        t.due_date,
-        t.sort_order,
-        t.external_url,
-        t.link_label,
-        t.is_required,
-        t.is_city_specific,
-
-        t.action_type,
-        t.action_payload,
-        t.secondary_action_type,
-        t.secondary_action_payload,
-        t.action_status,
-
-        t.completed_at,
-        t.created_at,
-        t.updated_at,
-
-        cs.office_name,
-        cs.office_address,
-        cs.office_email,
-        cs.office_phone,
-        cs.website_url,
-        cs.online_available,
-        cs.appointment_required
-      FROM public.move_case_tasks t
-      LEFT JOIN public.move_city_services cs
-        ON cs.id = t.city_service_id
-      WHERE t.id = $1
-        AND t.case_id = $2
-      LIMIT 1
-    `,
-    [taskId, caseId]
-  );
-
-  if (!taskResult.rowCount) {
-    throw new Error('Move task not found');
-  }
-
-  const taskRow = taskResult.rows[0];
+  const taskRow = await loadOwnedMoveTaskRow(pool, caseId, taskId, userId);
   const baseTask = mapMoveCaseTask(taskRow);
 
   const [questionRows, answerRows, outputRows, entityRows, nextTaskId] =

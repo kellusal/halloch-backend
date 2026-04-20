@@ -30,18 +30,32 @@ export function notFoundMiddleware(
 
 export function errorMiddleware(
   error: unknown,
-  _req: Request,
+  req: Request,
   res: Response,
   _next: NextFunction
 ) {
   if (error instanceof AppError) {
+    if (error.statusCode >= 500) {
+      console.error('[HTTP_ERROR]', {
+        route: `${req.method} ${req.originalUrl}`,
+        statusCode: error.statusCode,
+        code: error.code ?? null,
+        error: error.message,
+        stack: error.stack ?? null,
+      });
+    }
+
     return res.status(error.statusCode).json({
       message: error.expose ? error.message : 'Internal server error',
       ...(error.code ? { code: error.code } : {}),
     });
   }
 
-  console.error('Unhandled backend error:', error);
+  console.error('[HTTP_ERROR]', {
+    route: `${req.method} ${req.originalUrl}`,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack ?? null : null,
+  });
 
   return res.status(500).json({
     message: 'Internal server error',
@@ -53,11 +67,11 @@ export function sendInternalServerError(
   error: unknown,
   context?: string
 ) {
-  if (context) {
-    console.error(context, error);
-  } else {
-    console.error('Unhandled backend error:', error);
-  }
+  console.error('[INTERNAL_SERVER_ERROR]', {
+    context: context ?? null,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack ?? null : null,
+  });
 
   return res.status(500).json({
     message: 'Internal server error',

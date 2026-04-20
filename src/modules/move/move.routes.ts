@@ -6,11 +6,39 @@ import {
   completeMoveCaseTask,
   executeMoveCaseTaskAction,
   getMoveCaseTaskDetail,
+  getMoveCaseTasks as getMoveCaseTasksService,
   saveMoveCaseTaskAnswers,
 } from './move.services';
 import { refreshMoveCaseTasks } from './move.task-sync';
 
 const router = Router();
+
+function logMoveEvent(
+  event: string,
+  req: Request,
+  extra?: Record<string, unknown>
+) {
+  console.info(event, {
+    route: `${req.method} ${req.originalUrl}`,
+    userId: req.user?.id ?? null,
+    ...extra,
+  });
+}
+
+function logMoveError(
+  event: string,
+  req: Request,
+  error: unknown,
+  extra?: Record<string, unknown>
+) {
+  console.error(event, {
+    route: `${req.method} ${req.originalUrl}`,
+    userId: req.user?.id ?? null,
+    ...extra,
+    error: error instanceof Error ? error.message : String(error),
+    stack: error instanceof Error ? error.stack ?? null : null,
+  });
+}
 
 type MoveCaseRow = {
   id: string;
@@ -152,6 +180,19 @@ function normalizeSwissDateToIso(value: string): string | null {
 
   const [, day, month, year] = match;
   return `${year}-${month}-${day}`;
+}
+
+async function tryRefreshMoveCaseTasks(caseId: string, source: string) {
+  try {
+    await refreshMoveCaseTasks(caseId);
+    return true;
+  } catch (error) {
+    console.error(`[move] task refresh failed after ${source}`, {
+      caseId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return false;
+  }
 }
 
 router.get('/ping', (_req: Request, res: Response) => {
@@ -348,7 +389,7 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
     await client.query('COMMIT');
     transactionOpen = false;
 
-    await refreshMoveCaseTasks(createdCase.id);
+    const taskSyncOk = await tryRefreshMoveCaseTasks(createdCase.id, 'case-create');
 
     const refreshedCaseResult = await pool.query<MoveCaseRow>(
       `
@@ -385,10 +426,17 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
       [createdCase.id]
     );
 
+    logMoveEvent('[MOVE_CASE_CREATE_OK]', req, {
+      caseId: createdCase.id,
+      taskSyncOk,
+    });
+
     return res.status(201).json({
       case: buildMoveCaseResponse(refreshedCaseResult.rows[0] ?? createdCase),
+      taskSyncOk,
     });
   } catch (error) {
+    logMoveError('[MOVE_CASE_CREATE_ERROR]', req, error);
     if (transactionOpen) {
       await client.query('ROLLBACK');
     }
@@ -569,10 +617,15 @@ router.get('/cases/:caseId', requireAuth, async (req: Request, res: Response) =>
       });
     }
 
+    logMoveEvent('[MOVE_CASE_LOAD_OK]', req, { caseId });
+
     return res.status(200).json({
       case: buildMoveCaseResponse(result.rows[0]),
     });
   } catch (error) {
+    logMoveError('[MOVE_CASE_LOAD_ERROR]', req, error, {
+      caseId: req.params.caseId ?? null,
+    });
     return sendInternalServerError(res, error, 'Error loading move case:');
   }
 });
@@ -688,7 +741,7 @@ router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) 
       ]
     );
 
-    await refreshMoveCaseTasks(caseId as string);
+    const taskSyncOk = await tryRefreshMoveCaseTasks(caseId as string, 'case-update');
 
     const updatedCaseResult = await pool.query<MoveCaseRow>(
       `
@@ -727,6 +780,7 @@ router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) 
 
     return res.status(200).json({
       case: buildMoveCaseResponse(updatedCaseResult.rows[0]),
+      taskSyncOk,
     });
   } catch (error) {
     return sendInternalServerError(res, error, 'Error updating move case:');
@@ -771,57 +825,20 @@ router.get('/cases/:caseId/tasks', requireAuth, async (req: Request, res: Respon
       });
     }
 
-    const tasksResult = await pool.query(
-      `
-      SELECT
-        id,
-        case_id,
-        template_id,
-        city_service_id,
-        category,
+    const tasksResult = await getMoveCaseTasksService(caseId, userId);
 
-        header,
-        header_de,
-        header_fr,
-        header_en,
-
-        title,
-        title_de,
-        title_fr,
-        title_en,
-
-        description,
-        description_de,
-        description_fr,
-        description_en,
-
-        status,
-        due_date,
-        sort_order,
-        external_url,
-        link_label,
-        is_required,
-        is_city_specific,
-        action_type,
-        action_payload,
-        secondary_action_type,
-        secondary_action_payload,
-        action_status,
-        completed_at,
-        created_at,
-        updated_at
-      FROM move_case_tasks
-      WHERE case_id = $1
-        AND status <> 'hidden'
-      ORDER BY sort_order ASC, created_at ASC
-      `,
-      [caseId]
-    );
+    logMoveEvent('[MOVE_TASK_LIST_OK]', req, {
+      caseId,
+      taskCount: tasksResult.tasks.length,
+    });
 
     return res.status(200).json({
-      tasks: tasksResult.rows,
+      tasks: tasksResult.tasks,
     });
   } catch (error) {
+    logMoveError('[MOVE_TASK_LIST_ERROR]', req, error, {
+      caseId: req.params.caseId ?? null,
+    });
     return sendInternalServerError(res, error, 'Error loading move tasks:');
   }
 });
@@ -851,8 +868,18 @@ router.get(
 
       const detail = await getMoveCaseTaskDetail(caseId, taskId, userId);
 
+      logMoveEvent('[MOVE_TASK_DETAIL_OK]', req, {
+        caseId,
+        taskId,
+        nextTaskId: detail.nextTaskId,
+      });
+
       return res.status(200).json(detail);
     } catch (error) {
+      logMoveError('[MOVE_TASK_DETAIL_ERROR]', req, error, {
+        caseId: req.params.caseId ?? null,
+        taskId: req.params.taskId ?? null,
+      });
       if (error instanceof Error) {
         if (error.message === 'Move case not found') {
           return res.status(404).json({
@@ -898,8 +925,19 @@ router.put(
 
       const detail = await saveMoveCaseTaskAnswers(caseId, taskId, userId, answers);
 
+      logMoveEvent('[MOVE_TASK_ANSWERS_SAVE_OK]', req, {
+        caseId,
+        taskId,
+        answerCount: answers.length,
+        nextTaskId: detail.nextTaskId,
+      });
+
       return res.status(200).json(detail);
     } catch (error) {
+      logMoveError('[MOVE_TASK_ANSWERS_SAVE_ERROR]', req, error, {
+        caseId: req.params.caseId ?? null,
+        taskId: req.params.taskId ?? null,
+      });
       if (error instanceof Error) {
         if (error.message === 'Answers are required') {
           return res.status(400).json({
@@ -952,8 +990,20 @@ router.post(
         userId
       );
 
+      logMoveEvent('[MOVE_TASK_ACTION_OK]', req, {
+        caseId,
+        taskId,
+        actionType,
+        nextTaskId: result.nextTaskId,
+      });
+
       return res.status(200).json(result);
     } catch (error) {
+      logMoveError('[MOVE_TASK_ACTION_ERROR]', req, error, {
+        caseId: req.params.caseId ?? null,
+        taskId: req.params.taskId ?? null,
+        actionType: req.params.actionType ?? null,
+      });
       if (error instanceof Error) {
         if (error.message === 'Unsupported move task action') {
           return res.status(400).json({
@@ -1010,11 +1060,21 @@ router.patch(
 
       const result = await completeMoveCaseTask(caseId, taskId, userId);
 
+      logMoveEvent('[MOVE_TASK_COMPLETE_OK]', req, {
+        caseId,
+        taskId,
+        nextTaskId: result.nextTaskId,
+      });
+
       return res.status(200).json({
         task: result.task,
         nextTaskId: result.nextTaskId,
       });
     } catch (error) {
+      logMoveError('[MOVE_TASK_COMPLETE_ERROR]', req, error, {
+        caseId: req.params.caseId ?? null,
+        taskId: req.params.taskId ?? null,
+      });
       if (error instanceof Error) {
         if (
           error.message === 'Move task not found' ||
