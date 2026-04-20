@@ -638,7 +638,7 @@ async function findNextRelevantMoveTaskId(
       FROM public.move_case_tasks
       WHERE case_id = $1
         AND status IN ('in_progress', 'open')
-        AND ($2::uuid IS NULL OR id <> $2::uuid)
+        AND ($2::bigint IS NULL OR id <> $2::bigint)
       ORDER BY
         CASE
           WHEN status = 'in_progress' THEN 0
