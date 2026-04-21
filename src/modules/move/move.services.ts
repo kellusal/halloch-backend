@@ -1,33 +1,5 @@
 import { pool } from '../../db/pool';
-import { generateTasksForCase } from './move.generator';
 import { refreshMoveCaseTasks } from './move.task-sync';
-
-type CreateMoveCaseInput = {
-  userId: number;
-  fromCity?: string;
-  toCity: string;
-  moveDate: string;
-  hasCar: boolean;
-  hasChildren: boolean;
-};
-
-type CityRow = {
-  id: string;
-  name: string;
-};
-
-type MoveCaseRow = {
-  id: string;
-  user_id: string;
-  from_city_id: string | null;
-  to_city_id: string;
-  move_date: string;
-  has_car: boolean;
-  has_children: boolean;
-  status: string;
-  created_at: string;
-  updated_at: string;
-};
 
 type MoveCaseTaskRow = {
   id: string;
@@ -216,21 +188,6 @@ function warnSchemaFallback(key: string, message: string, error?: unknown) {
       : '';
 
   console.warn(`[move] ${message}${details}`);
-}
-
-function mapMoveCase(row: MoveCaseRow) {
-  return {
-    id: row.id,
-    userId: row.user_id,
-    fromCityId: row.from_city_id,
-    toCityId: row.to_city_id,
-    moveDate: row.move_date,
-    hasCar: row.has_car,
-    hasChildren: row.has_children,
-    status: row.status,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
 }
 
 function mapMoveCaseTask(row: MoveCaseTaskRow) {
@@ -592,7 +549,7 @@ function selectColumn(
   columns: Set<string>,
   alias: string,
   columnName: string,
-  fallbackType: 'text' | 'boolean' | 'jsonb' | 'uuid' | 'integer' | 'timestamp'
+  fallbackType: 'text' | 'boolean' | 'jsonb' | 'integer' | 'timestamp'
 ) {
   if (columns.has(columnName)) {
     return `${alias}.${columnName}`;
@@ -638,7 +595,7 @@ async function findNextRelevantMoveTaskId(
       FROM public.move_case_tasks
       WHERE case_id = $1
         AND status IN ('in_progress', 'open')
-        AND ($2::bigint IS NULL OR id <> $2::bigint)
+        AND ($2::text IS NULL OR id::text <> $2::text)
       ORDER BY
         CASE
           WHEN status = 'in_progress' THEN 0
@@ -676,8 +633,8 @@ async function loadOwnedMoveTaskRow(
       SELECT
         t.id,
         t.case_id,
-        ${selectColumn(taskColumns, 't', 'template_id', 'uuid')},
-        ${selectColumn(taskColumns, 't', 'city_service_id', 'uuid')},
+        ${selectColumn(taskColumns, 't', 'template_id', 'text')},
+        ${selectColumn(taskColumns, 't', 'city_service_id', 'text')},
         ${selectColumn(taskColumns, 't', 'category', 'text')},
 
         ${selectColumn(taskColumns, 't', 'header', 'text')},
@@ -1013,135 +970,6 @@ function buildWhatsappActionData(
   };
 }
 
-async function findCityByName(cityName: string) {
-  const value = cityName.trim();
-
-  if (!value) {
-    return null;
-  }
-
-  const result = await pool.query<CityRow>(
-    `
-      SELECT id, name
-      FROM public.move_cities
-      WHERE LOWER(name) = LOWER($1)
-      LIMIT 1
-    `,
-    [value]
-  );
-
-  if (!result.rowCount) {
-    return null;
-  }
-
-  return result.rows[0];
-}
-
-export async function createMoveCase(input: CreateMoveCaseInput) {
-  if (!input.userId) {
-    throw new Error('User is required');
-  }
-
-  if (!input.toCity?.trim()) {
-    throw new Error('To city is required');
-  }
-
-  if (!input.moveDate?.trim()) {
-    throw new Error('Move date is required');
-  }
-
-  const fromCity = input.fromCity?.trim()
-    ? await findCityByName(input.fromCity)
-    : null;
-
-  const toCity = await findCityByName(input.toCity);
-
-  if (!toCity) {
-    throw new Error('Destination city not found');
-  }
-
-  if (input.fromCity?.trim() && !fromCity) {
-    throw new Error('Origin city not found');
-  }
-
-  const insertResult = await pool.query<MoveCaseRow>(
-    `
-      INSERT INTO public.move_cases (
-        user_id,
-        from_city_id,
-        to_city_id,
-        move_date,
-        has_car,
-        has_children,
-        status
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, 'in_progress')
-      RETURNING
-        id,
-        user_id,
-        from_city_id,
-        to_city_id,
-        move_date,
-        has_car,
-        has_children,
-        status,
-        created_at,
-        updated_at
-    `,
-    [
-      input.userId,
-      fromCity?.id ?? null,
-      toCity.id,
-      input.moveDate,
-      input.hasCar,
-      input.hasChildren,
-    ]
-  );
-
-  const createdCase = insertResult.rows[0];
-
-  await generateTasksForCase(createdCase.id);
-
-  return {
-    case: mapMoveCase(createdCase),
-  };
-}
-
-export async function getMoveCaseById(caseId: string, userId: number) {
-  if (!caseId?.trim()) {
-    throw new Error('Case id is required');
-  }
-
-  const result = await pool.query<MoveCaseRow>(
-    `
-      SELECT
-        id,
-        user_id,
-        from_city_id,
-        to_city_id,
-        move_date,
-        has_car,
-        has_children,
-        status,
-        created_at,
-        updated_at
-      FROM public.move_cases
-      WHERE id = $1
-        AND user_id = $2
-      LIMIT 1
-    `,
-    [caseId, userId]
-  );
-
-  if (!result.rowCount) {
-    throw new Error('Move case not found');
-  }
-
-  return {
-    case: mapMoveCase(result.rows[0]),
-  };
-}
-
 export async function getMoveCaseTasks(caseId: string, userId: number | string) {
   if (!caseId?.trim()) {
     throw new Error('Case id is required');
@@ -1169,8 +997,8 @@ export async function getMoveCaseTasks(caseId: string, userId: number | string) 
       SELECT
         id,
         case_id,
-        ${selectColumn(taskColumns, 'move_case_tasks', 'template_id', 'uuid')},
-        ${selectColumn(taskColumns, 'move_case_tasks', 'city_service_id', 'uuid')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'template_id', 'text')},
+        ${selectColumn(taskColumns, 'move_case_tasks', 'city_service_id', 'text')},
         ${selectColumn(taskColumns, 'move_case_tasks', 'category', 'text')},
 
         ${selectColumn(taskColumns, 'move_case_tasks', 'title', 'text')},

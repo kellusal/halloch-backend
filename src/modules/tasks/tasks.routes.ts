@@ -156,7 +156,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           progress,
           openCount: openTasks.length,
           nextTask: nextTask?.title ?? null,
-          route: `/umzug/process?caseId=${latestMoveCase.id}`,
+          route: `/move/${latestMoveCase.id}`,
           tone: 'red',
           statusLabel: 'Aktiv',
         },
@@ -169,7 +169,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         due: formatDueLabel(task.due_date),
         status: isDueSoon(task.due_date) ? 'soon' : 'open',
         priority: getPriority(task.due_date),
-        route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${task.id}`,
+        route: `/move/task/${latestMoveCase.id}/${task.id}`,
       }));
 
       doneTasks = doneModuleTasks
@@ -191,7 +191,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
             title: openTasks[0].title,
             module: 'Umzug',
             due: formatDueLabel(openTasks[0].due_date),
-            route: `/umzug/task?caseId=${latestMoveCase.id}&taskId=${openTasks[0].id}`,
+            route: `/move/task/${latestMoveCase.id}/${openTasks[0].id}`,
           }
         : null;
 

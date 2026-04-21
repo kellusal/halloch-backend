@@ -1109,7 +1109,7 @@ async function loadLinksByTemplateId(client: PoolClient, templateIds: string[]) 
         sort_order,
         is_active
       FROM move_task_template_links
-      WHERE task_template_id = ANY($1::uuid[])
+      WHERE task_template_id::text = ANY($1::text[])
       `,
       [templateIds]
     );
@@ -1145,7 +1145,7 @@ async function loadLinksByTemplateId(client: PoolClient, templateIds: string[]) 
         sort_order,
         is_active
       FROM move_task_links
-      WHERE task_template_id = ANY($1::uuid[])
+      WHERE task_template_id::text = ANY($1::text[])
       `,
       [templateIds]
     );
