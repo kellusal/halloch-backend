@@ -500,7 +500,6 @@ async function loadOptionalTableRows(tableName: string, whereColumn: string, whe
 
     return result.rows;
   } catch (error) {
-    const message = error instanceof Error ? error.message : '';
     const code = typeof error === 'object' && error !== null && 'code' in error
       ? String((error as { code?: unknown }).code ?? '')
       : '';
@@ -561,24 +560,6 @@ function selectColumn(
 function toJsonValue(value: unknown): unknown {
   if (value === undefined) return null;
   return value;
-}
-
-function buildInsertStatementParts(columns: string[], parameterColumns: string[]) {
-  let parameterIndex = 0;
-
-  const placeholders = columns.map((column) => {
-    if (column === 'answered_at' || column === 'created_at' || column === 'updated_at') {
-      return 'NOW()';
-    }
-
-    parameterIndex += 1;
-    return `$${parameterIndex}`;
-  });
-
-  return {
-    placeholders,
-    expectedParameterCount: parameterColumns.length,
-  };
 }
 
 function isSupportedMoveTaskActionType(value: string): value is SupportedMoveTaskActionType {
@@ -705,148 +686,53 @@ async function saveMoveTaskOutput(
   title: string | null,
   content: Record<string, unknown>
 ): Promise<void> {
-  const outputColumns = await loadTableColumns(client, 'public', 'move_case_task_outputs');
-  const outputJson = toJsonValue(content);
-  const updateAssignments: string[] = [];
-  const updateValues: unknown[] = [];
+  const payloadJson = toJsonValue({
+    outputKey,
+    title,
+    ...content,
+  });
 
-  if (outputColumns.has('output_type')) {
-    updateAssignments.push(`output_type = $${updateValues.length + 1}`);
-    updateValues.push(outputType);
-  }
-
-  if (outputColumns.has('type')) {
-    updateAssignments.push(`type = $${updateValues.length + 1}`);
-    updateValues.push(outputType);
-  }
-
-  if (outputColumns.has('title')) {
-    updateAssignments.push(`title = $${updateValues.length + 1}`);
-    updateValues.push(title);
-  }
-
-  if (outputColumns.has('title_de')) {
-    updateAssignments.push(`title_de = $${updateValues.length + 1}`);
-    updateValues.push(title);
-  }
-
-  if (outputColumns.has('content_json')) {
-    updateAssignments.push(`content_json = $${updateValues.length + 1}`);
-    updateValues.push(outputJson);
-  }
-
-  if (outputColumns.has('payload_json')) {
-    updateAssignments.push(`payload_json = $${updateValues.length + 1}`);
-    updateValues.push(outputJson);
-  }
-
-  if (outputColumns.has('content')) {
-    updateAssignments.push(`content = $${updateValues.length + 1}`);
-    updateValues.push(outputJson);
-  }
-
-  if (outputColumns.has('payload')) {
-    updateAssignments.push(`payload = $${updateValues.length + 1}`);
-    updateValues.push(outputJson);
-  }
-
-  if (outputColumns.has('updated_at')) {
-    updateAssignments.push('updated_at = NOW()');
-  }
-
-  if (updateAssignments.length === 0) {
-    updateAssignments.push('output_key = output_key');
-  }
+  const fileUrl =
+    typeof content.file_url === 'string'
+      ? content.file_url
+      : typeof content.url === 'string'
+        ? content.url
+        : null;
 
   const updateResult = await client.query(
     `
       UPDATE public.move_case_task_outputs
-      SET ${updateAssignments.join(', ')}
-      WHERE case_task_id = $${updateValues.length + 1}
-        AND output_key = $${updateValues.length + 2}
+      SET
+        status = 'prepared',
+        payload_json = $1,
+        file_url = $2,
+        generated_at = NOW(),
+        updated_at = NOW()
+      WHERE case_task_id = $3
+        AND output_type = $4
     `,
-    [...updateValues, caseTaskId, outputKey]
+    [payloadJson, fileUrl, caseTaskId, outputType]
   );
 
   if (updateResult.rowCount && updateResult.rowCount > 0) {
     return;
   }
 
-  const insertColumns = ['case_task_id', 'output_key'];
-  const insertValueColumns = ['case_task_id', 'output_key'];
-  const insertValues: unknown[] = [caseTaskId, outputKey];
-
-  if (outputColumns.has('output_type')) {
-    insertColumns.push('output_type');
-    insertValueColumns.push('output_type');
-    insertValues.push(outputType);
-  }
-
-  if (outputColumns.has('type')) {
-    insertColumns.push('type');
-    insertValueColumns.push('type');
-    insertValues.push(outputType);
-  }
-
-  if (outputColumns.has('title')) {
-    insertColumns.push('title');
-    insertValueColumns.push('title');
-    insertValues.push(title);
-  }
-
-  if (outputColumns.has('title_de')) {
-    insertColumns.push('title_de');
-    insertValueColumns.push('title_de');
-    insertValues.push(title);
-  }
-
-  if (outputColumns.has('content_json')) {
-    insertColumns.push('content_json');
-    insertValueColumns.push('content_json');
-    insertValues.push(outputJson);
-  }
-
-  if (outputColumns.has('payload_json')) {
-    insertColumns.push('payload_json');
-    insertValueColumns.push('payload_json');
-    insertValues.push(outputJson);
-  }
-
-  if (outputColumns.has('content')) {
-    insertColumns.push('content');
-    insertValueColumns.push('content');
-    insertValues.push(outputJson);
-  }
-
-  if (outputColumns.has('payload')) {
-    insertColumns.push('payload');
-    insertValueColumns.push('payload');
-    insertValues.push(outputJson);
-  }
-
-  if (outputColumns.has('created_at')) {
-    insertColumns.push('created_at');
-  }
-
-  if (outputColumns.has('updated_at')) {
-    insertColumns.push('updated_at');
-  }
-
-  const { placeholders, expectedParameterCount } = buildInsertStatementParts(
-    insertColumns,
-    insertValueColumns
-  );
-
-  if (expectedParameterCount !== insertValues.length) {
-    throw new Error('Output insert columns could not be mapped safely');
-  }
-
   await client.query(
     `
-      INSERT INTO public.move_case_task_outputs (${insertColumns.join(', ')})
-      VALUES (${placeholders.join(', ')})
+      INSERT INTO public.move_case_task_outputs (
+        case_task_id,
+        output_type,
+        status,
+        payload_json,
+        file_url,
+        generated_at,
+        created_at,
+        updated_at
+      )
+      VALUES ($1, $2, 'prepared', $3, $4, NOW(), NOW(), NOW())
     `,
-    insertValues
+    [caseTaskId, outputType, payloadJson, fileUrl]
   );
 }
 
@@ -1230,152 +1116,39 @@ export async function saveMoveCaseTaskAnswers(
       throw new Error('Move task not found');
     }
 
-    const task = taskResult.rows[0];
-    const questionRows = task.template_id
-      ? await loadOptionalTableRows(
-          'public.move_task_template_questions',
-          'task_template_id',
-          task.template_id
-        )
-      : [];
-
-    const questionByKey = new Map<string, GenericRow>();
-    for (const row of questionRows) {
-      const questionKey = asString(pickFirst(row, ['question_key', 'field_key', 'key', 'slug']));
-      if (questionKey) {
-        questionByKey.set(questionKey, row);
-      }
-    }
-
-    const answerColumns = await loadTableColumns(client, 'public', 'move_case_task_answers');
-
     for (const item of normalizedAnswers) {
-      const matchingQuestion = questionByKey.get(item.question_key) ?? null;
-      const questionId = matchingQuestion
-        ? asString(pickFirst(matchingQuestion, ['id']))
-        : null;
-      const answerJson = toJsonValue(item.answer);
-      const answerText =
-        typeof item.answer === 'string' ? item.answer : JSON.stringify(answerJson);
-
-      const updateAssignments: string[] = [];
-      const updateValues: unknown[] = [];
-
-      if (answerColumns.has('question_id')) {
-        updateAssignments.push(`question_id = $${updateValues.length + 1}`);
-        updateValues.push(questionId);
-      }
-
-      if (answerColumns.has('answer_json')) {
-        updateAssignments.push(`answer_json = $${updateValues.length + 1}`);
-        updateValues.push(answerJson);
-      }
-
-      if (answerColumns.has('value_json')) {
-        updateAssignments.push(`value_json = $${updateValues.length + 1}`);
-        updateValues.push(answerJson);
-      }
-
-      if (answerColumns.has('value_text')) {
-        updateAssignments.push(`value_text = $${updateValues.length + 1}`);
-        updateValues.push(answerText);
-      }
-
-      if (answerColumns.has('answer_text')) {
-        updateAssignments.push(`answer_text = $${updateValues.length + 1}`);
-        updateValues.push(answerText);
-      }
-
-      if (answerColumns.has('answered_at')) {
-        updateAssignments.push(`answered_at = NOW()`);
-      }
-
-      if (answerColumns.has('updated_at')) {
-        updateAssignments.push(`updated_at = NOW()`);
-      }
-
-      if (updateAssignments.length === 0) {
-        updateAssignments.push('question_key = question_key');
-      }
-
-      const updateWhereCaseTaskIndex = updateValues.length + 1;
-      const updateWhereQuestionKeyIndex = updateValues.length + 2;
+      const answerJson = item.answer ?? null;
 
       const updateResult = await client.query(
         `
           UPDATE public.move_case_task_answers
-          SET ${updateAssignments.join(', ')}
-          WHERE case_task_id = $${updateWhereCaseTaskIndex}
-            AND question_key = $${updateWhereQuestionKeyIndex}
+          SET
+            answer_json = $1,
+            answered_at = NOW(),
+            updated_at = NOW()
+          WHERE case_task_id = $2
+            AND question_key = $3
         `,
-        [...updateValues, taskId, item.question_key]
+        [answerJson, taskId, item.question_key]
       );
 
       if (updateResult.rowCount && updateResult.rowCount > 0) {
         continue;
       }
 
-      const insertColumns = ['case_task_id', 'question_key'];
-      const insertValueColumns = ['case_task_id', 'question_key'];
-      const insertValues: unknown[] = [taskId, item.question_key];
-
-      if (answerColumns.has('question_id')) {
-        insertColumns.push('question_id');
-        insertValueColumns.push('question_id');
-        insertValues.push(questionId);
-      }
-
-      if (answerColumns.has('answer_json')) {
-        insertColumns.push('answer_json');
-        insertValueColumns.push('answer_json');
-        insertValues.push(answerJson);
-      }
-
-      if (answerColumns.has('value_json')) {
-        insertColumns.push('value_json');
-        insertValueColumns.push('value_json');
-        insertValues.push(answerJson);
-      }
-
-      if (answerColumns.has('value_text')) {
-        insertColumns.push('value_text');
-        insertValueColumns.push('value_text');
-        insertValues.push(answerText);
-      }
-
-      if (answerColumns.has('answer_text')) {
-        insertColumns.push('answer_text');
-        insertValueColumns.push('answer_text');
-        insertValues.push(answerText);
-      }
-
-      if (answerColumns.has('answered_at')) {
-        insertColumns.push('answered_at');
-      }
-
-      if (answerColumns.has('created_at')) {
-        insertColumns.push('created_at');
-      }
-
-      if (answerColumns.has('updated_at')) {
-        insertColumns.push('updated_at');
-      }
-
-      const { placeholders, expectedParameterCount } = buildInsertStatementParts(
-        insertColumns,
-        insertValueColumns
-      );
-
-      if (expectedParameterCount !== insertValues.length) {
-        throw new Error('Answer insert columns could not be mapped safely');
-      }
-
       await client.query(
         `
-          INSERT INTO public.move_case_task_answers (${insertColumns.join(', ')})
-          VALUES (${placeholders.join(', ')})
+          INSERT INTO public.move_case_task_answers (
+            case_task_id,
+            question_key,
+            answer_json,
+            answered_at,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, NOW(), NOW(), NOW())
         `,
-        insertValues
+        [taskId, item.question_key, answerJson]
       );
     }
 
@@ -1399,7 +1172,6 @@ export async function saveMoveCaseTaskAnswers(
     client.release();
   }
 
-  // Keep the regeneration hook here so future runtime rules can react to saved answers.
   await refreshMoveCaseTasks(caseId);
 
   return getMoveCaseTaskDetail(caseId, taskId, userId);
@@ -1488,7 +1260,7 @@ export async function executeMoveCaseTaskAction(
 
   const detail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const createdOutput =
-    detail.task.outputs.find((output) => output.output_key === outputKey) ?? null;
+    detail.task.outputs.find((output) => output.type === outputType) ?? null;
 
   return {
     action: {
