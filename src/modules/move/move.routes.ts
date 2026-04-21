@@ -40,11 +40,17 @@ function logMoveError(
   });
 }
 
+function getSingleParam(value: string | string[] | undefined): string | null {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value[0] ?? null;
+  return null;
+}
+
 type MoveCaseRow = {
   id: string;
   user_id: string;
-  from_city_id: string;
-  to_city_id: string;
+  from_city_id: string | null;
+  to_city_id: string | null;
   move_date: string;
   has_car: boolean;
   has_children: boolean;
@@ -501,6 +507,7 @@ router.get('/cases', requireAuth, async (req: Request, res: Response) => {
       cases: result.rows.map((row) => buildMoveCaseResponse(row)),
     });
   } catch (error) {
+    logMoveError('[MOVE_CASE_LIST_ERROR]', req, error);
     return sendInternalServerError(res, error, 'Error loading move cases:');
   }
 });
@@ -556,6 +563,7 @@ router.get('/cases/current-active', requireAuth, async (req: Request, res: Respo
       case: result.rows[0] ? buildMoveCaseResponse(result.rows[0]) : null,
     });
   } catch (error) {
+    logMoveError('[MOVE_CURRENT_ACTIVE_LOAD_ERROR]', req, error);
     return sendInternalServerError(
       res,
       error,
@@ -566,8 +574,14 @@ router.get('/cases/current-active', requireAuth, async (req: Request, res: Respo
 
 router.get('/cases/:caseId', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { caseId } = req.params;
+    const caseId = getSingleParam(req.params.caseId);
     const userId = req.user?.id;
+
+    if (!caseId) {
+      return res.status(400).json({
+        message: 'Case id ist erforderlich.',
+      });
+    }
 
     if (!userId) {
       return res.status(401).json({
@@ -632,8 +646,14 @@ router.get('/cases/:caseId', requireAuth, async (req: Request, res: Response) =>
 
 router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) => {
   try {
-    const { caseId } = req.params;
+    const caseId = getSingleParam(req.params.caseId);
     const userId = req.user?.id;
+
+    if (!caseId) {
+      return res.status(400).json({
+        message: 'Case id ist erforderlich.',
+      });
+    }
 
     if (!userId) {
       return res.status(401).json({
@@ -741,7 +761,7 @@ router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) 
       ]
     );
 
-    const taskSyncOk = await tryRefreshMoveCaseTasks(caseId as string, 'case-update');
+    const taskSyncOk = await tryRefreshMoveCaseTasks(caseId, 'case-update');
 
     const updatedCaseResult = await pool.query<MoveCaseRow>(
       `
@@ -783,16 +803,16 @@ router.patch('/cases/:caseId', requireAuth, async (req: Request, res: Response) 
       taskSyncOk,
     });
   } catch (error) {
+    logMoveError('[MOVE_CASE_UPDATE_ERROR]', req, error, {
+      caseId: req.params.caseId ?? null,
+    });
     return sendInternalServerError(res, error, 'Error updating move case:');
   }
 });
 
 router.get('/cases/:caseId/tasks', requireAuth, async (req: Request, res: Response) => {
   try {
-    const rawCaseId = req.params.caseId;
-
-    const caseId =
-      typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
+    const caseId = getSingleParam(req.params.caseId);
 
     if (!caseId) {
       return res.status(400).json({
@@ -848,10 +868,8 @@ router.get(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const rawCaseId = req.params.caseId;
-      const rawTaskId = req.params.taskId;
-      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
-      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
+      const caseId = getSingleParam(req.params.caseId);
+      const taskId = getSingleParam(req.params.taskId);
       const userId = req.user?.id;
 
       if (!caseId || !taskId) {
@@ -904,10 +922,8 @@ router.put(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const rawCaseId = req.params.caseId;
-      const rawTaskId = req.params.taskId;
-      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
-      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
+      const caseId = getSingleParam(req.params.caseId);
+      const taskId = getSingleParam(req.params.taskId);
       const userId = req.user?.id;
       const answers = Array.isArray(req.body?.answers) ? req.body.answers : [];
 
@@ -962,13 +978,9 @@ router.post(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const rawCaseId = req.params.caseId;
-      const rawTaskId = req.params.taskId;
-      const rawActionType = req.params.actionType;
-      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
-      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
-      const actionType =
-        typeof rawActionType === 'string' ? rawActionType : rawActionType?.[0];
+      const caseId = getSingleParam(req.params.caseId);
+      const taskId = getSingleParam(req.params.taskId);
+      const actionType = getSingleParam(req.params.actionType);
       const userId = req.user?.id;
 
       if (!caseId || !taskId || !actionType) {
@@ -1040,10 +1052,8 @@ router.patch(
   requireAuth,
   async (req: Request, res: Response) => {
     try {
-      const rawCaseId = req.params.caseId;
-      const rawTaskId = req.params.taskId;
-      const caseId = typeof rawCaseId === 'string' ? rawCaseId : rawCaseId?.[0];
-      const taskId = typeof rawTaskId === 'string' ? rawTaskId : rawTaskId?.[0];
+      const caseId = getSingleParam(req.params.caseId);
+      const taskId = getSingleParam(req.params.taskId);
       const userId = req.user?.id;
 
       if (!caseId || !taskId) {

@@ -412,15 +412,36 @@ function mapAnswerRow(row: GenericRow): MoveTaskAnswerDto {
 }
 
 function mapOutputRow(row: GenericRow): MoveTaskOutputDto {
-  const titleI18n = localizedValue(row, 'title');
+  const payload = parseJsonLike(
+    pickFirst(row, ['payload_json', 'content_json', 'payload', 'content'])
+  );
+  const payloadRecord =
+    payload && typeof payload === 'object' && !Array.isArray(payload)
+      ? (payload as Record<string, unknown>)
+      : {};
+
+  const titleI18n = payloadRecord.title && typeof payloadRecord.title === 'object'
+    ? {
+        de: asString((payloadRecord.title as Record<string, unknown>).de),
+        fr: asString((payloadRecord.title as Record<string, unknown>).fr),
+        en: asString((payloadRecord.title as Record<string, unknown>).en),
+      }
+    : localizedValue(row, 'title');
 
   return {
     id: asString(pickFirst(row, ['id'])),
-    output_key: asString(pickFirst(row, ['output_key', 'key', 'slug'])),
+    output_key:
+      asString(pickFirst(row, ['output_key', 'key', 'slug'])) ??
+      asString(payloadRecord.outputKey) ??
+      asString(pickFirst(row, ['output_type', 'type', 'kind'])),
     type: asString(pickFirst(row, ['output_type', 'type', 'kind'])),
-    title: localizedScalar(titleI18n, asString(pickFirst(row, ['title']))),
-    content: parseJsonLike(pickFirst(row, ['content_json', 'payload_json', 'content', 'payload'])),
-    created_at: asString(pickFirst(row, ['created_at'])),
+    title:
+      localizedScalar(titleI18n, asString(pickFirst(row, ['title']))) ??
+      asString(payloadRecord.title),
+    content: payload ?? null,
+    created_at:
+      asString(pickFirst(row, ['generated_at'])) ??
+      asString(pickFirst(row, ['created_at'])),
     updated_at: asString(pickFirst(row, ['updated_at'])),
   };
 }
@@ -575,16 +596,9 @@ async function findNextRelevantMoveTaskId(
       SELECT id
       FROM public.move_case_tasks
       WHERE case_id = $1
-        AND status IN ('in_progress', 'open')
+        AND status = 'open'
         AND ($2::text IS NULL OR id::text <> $2::text)
-      ORDER BY
-        CASE
-          WHEN status = 'in_progress' THEN 0
-          WHEN status = 'open' THEN 1
-          ELSE 2
-        END,
-        sort_order ASC,
-        created_at ASC
+      ORDER BY sort_order ASC, created_at ASC
       LIMIT 1
     `,
     [caseId, currentTaskId ?? null]
@@ -917,7 +931,7 @@ export async function getMoveCaseTasks(caseId: string, userId: number | string) 
         ${selectColumn(taskColumns, 'move_case_tasks', 'updated_at', 'text')}
       FROM public.move_case_tasks
       WHERE case_id = $1
-        AND status <> 'hidden'
+        AND status IN ('open', 'done')
       ORDER BY sort_order ASC, created_at ASC
     `,
     [caseId]
@@ -1258,7 +1272,9 @@ export async function executeMoveCaseTaskAction(
 
   const detail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const createdOutput =
-    detail.task.outputs.find((output) => output.type === outputType) ?? null;
+    [...detail.task.outputs]
+      .reverse()
+      .find((output) => output.type === outputType) ?? null;
 
   return {
     action: {

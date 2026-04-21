@@ -76,7 +76,7 @@ type CityServiceRow = {
 type ExistingTaskRow = {
   id: string;
   template_id: string | null;
-  status: 'open' | 'in_progress' | 'done' | 'hidden';
+  status: 'open' | 'done' | 'skipped';
 };
 
 type GenericRow = Record<string, unknown>;
@@ -710,9 +710,7 @@ export async function upsertMoveCaseTask(
     };
 
     if (taskTableColumns.has('status')) {
-      updateAssignments.push(
-        `status = CASE WHEN status = 'in_progress' THEN 'in_progress' ELSE 'open' END`
-      );
+      updateAssignments.push(`status = 'open'`);
     }
 
     addUpdate('city_service_id', task.cityServiceId);
@@ -1027,7 +1025,6 @@ async function loadRulesByTemplateId(client: PoolClient) {
         ? String((error as { code?: unknown }).code ?? '')
         : '';
 
-    // Allow generator rollout before every environment has the new rules table.
     if (code !== '42P01' && code !== '42703') {
       throw error;
     }
@@ -1064,7 +1061,6 @@ async function loadCapabilitiesByTemplateId(client: PoolClient) {
         ? String((error as { code?: unknown }).code ?? '')
         : '';
 
-    // Capabilities are additive; missing table should degrade to classic actions.
     if (code !== '42P01' && code !== '42703') {
       throw error;
     }
@@ -1216,8 +1212,6 @@ async function loadAnswerContextValues(client: PoolClient, caseId: string) {
         ? String((error as { code?: unknown }).code ?? '')
         : '';
 
-    // Keep regeneration backward compatible in environments where the new table
-    // is not available yet.
     if (code === '42P01' || code === '42703') {
       return {};
     }
@@ -1504,22 +1498,25 @@ export async function generateMoveCaseTasks(caseId: string) {
           servicesBySlug,
           linksByTemplateId
         );
-      const capabilityActions = mapCapabilitiesToActions(
-        capabilitiesByTemplateId.get(String(template.id)) ?? [],
-        resolvedContext
-      );
-      const legacyActions =
-        capabilityActions.primary || capabilityActions.secondary
-          ? capabilityActions
-          : mapLegacyTemplateActions(template);
-      const taskRow = buildTaskRow(
-        template,
-        context,
-        resolvedContext,
-        legacyActions.primary || legacyActions.secondary
-          ? legacyActions
-          : createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabel)
-      );
+
+        const capabilityActions = mapCapabilitiesToActions(
+          capabilitiesByTemplateId.get(String(template.id)) ?? [],
+          resolvedContext
+        );
+
+        const legacyActions =
+          capabilityActions.primary || capabilityActions.secondary
+            ? capabilityActions
+            : mapLegacyTemplateActions(template);
+
+        const taskRow = buildTaskRow(
+          template,
+          context,
+          resolvedContext,
+          legacyActions.primary || legacyActions.secondary
+            ? legacyActions
+            : createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabel)
+        );
 
         await upsertMoveCaseTask(
           client,
@@ -1555,7 +1552,7 @@ export async function generateMoveCaseTasks(caseId: string) {
           `
           UPDATE move_case_tasks
           SET
-            status = 'hidden',
+            status = 'skipped',
             updated_at = NOW()
           WHERE id = $1
             AND case_id = $2

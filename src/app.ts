@@ -1,5 +1,5 @@
-import 'dotenv/config';
 import cors, { type CorsOptionsDelegate } from 'cors';
+import 'dotenv/config';
 import express from 'express';
 import { env } from './config/env';
 import { pool } from './db/pool';
@@ -29,7 +29,7 @@ const corsOptionsDelegate: CorsOptionsDelegate = (req, callback) => {
 app.use(cors(corsOptionsDelegate));
 app.options(/.*/, cors(corsOptionsDelegate));
 
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 app.get('/health', async (_req, res) => {
   try {
