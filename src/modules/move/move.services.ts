@@ -1117,13 +1117,16 @@ export async function saveMoveCaseTaskAnswers(
     }
 
     for (const item of normalizedAnswers) {
-      const answerJson = item.answer ?? null;
+      const answerJson =
+        item.answer === undefined
+          ? null
+          : JSON.stringify(item.answer);
 
       const updateResult = await client.query(
         `
           UPDATE public.move_case_task_answers
           SET
-            answer_json = $1,
+            answer_json = $1::jsonb,
             answered_at = NOW(),
             updated_at = NOW()
           WHERE case_task_id = $2
@@ -1146,7 +1149,7 @@ export async function saveMoveCaseTaskAnswers(
             created_at,
             updated_at
           )
-          VALUES ($1, $2, $3, NOW(), NOW(), NOW())
+          VALUES ($1, $2, $3::jsonb, NOW(), NOW(), NOW())
         `,
         [taskId, item.question_key, answerJson]
       );
@@ -1156,7 +1159,6 @@ export async function saveMoveCaseTaskAnswers(
       `
         UPDATE public.move_case_tasks
         SET
-          status = CASE WHEN status = 'open' THEN 'in_progress' ELSE status END,
           updated_at = NOW()
         WHERE id = $1
           AND case_id = $2
@@ -1238,10 +1240,6 @@ export async function executeMoveCaseTaskAction(
       `
         UPDATE public.move_case_tasks
         SET
-          status = CASE
-            WHEN status = 'open' THEN 'in_progress'
-            ELSE status
-          END,
           action_status = 'completed',
           updated_at = NOW()
         WHERE id = $1
