@@ -1200,14 +1200,14 @@ export async function executeMoveCaseTaskAction(
   const actionContext = buildActionContext(beforeDetail.task);
   const client = await pool.connect();
   let outputKey = '';
+  let outputType = '';
+  let outputTitle: string | null = null;
 
   try {
     await client.query('BEGIN');
 
     await loadOwnedMoveTaskRow(client, caseId, taskId, userId);
 
-    let outputType = '';
-    let outputTitle: string | null = null;
     let actionData: Record<string, unknown>;
 
     if (actionType === 'web') {
