@@ -214,18 +214,15 @@ router.post('/cases', requireAuth, async (req: Request, res: Response) => {
       fromCity,
       toCity,
       moveDate,
-
       hasCar,
       hasChildren,
       hasDog,
-
       fromStreet,
       fromHouseNumber,
       fromZip,
       toStreet,
       toHouseNumber,
       toZip,
-
       childrenCount,
       maritalStatus,
       healthInsuranceName,
@@ -494,7 +491,7 @@ router.get('/cases', requireAuth, async (req: Request, res: Response) => {
       WHERE mc.user_id = $1
       ORDER BY
         CASE
-          WHEN mc.status IN ('draft', 'in_progress') THEN 0
+          WHEN mc.status = 'draft' THEN 0
           WHEN mc.status = 'done' THEN 2
           ELSE 1
         END,
@@ -552,7 +549,7 @@ router.get('/cases/current-active', requireAuth, async (req: Request, res: Respo
       LEFT JOIN move_cities fc ON fc.id = mc.from_city_id
       LEFT JOIN move_cities tc ON tc.id = mc.to_city_id
       WHERE mc.user_id = $1
-        AND mc.status IN ('draft', 'in_progress')
+        AND mc.status = 'draft'
       ORDER BY mc.created_at DESC
       LIMIT 1
       `,

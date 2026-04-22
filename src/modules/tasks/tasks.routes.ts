@@ -21,11 +21,11 @@ type MoveCaseTaskRow = {
   category: string | null;
   title: string;
   description: string | null;
-  status: string;
+  status: 'open' | 'done' | 'skipped';
   due_date: string | null;
   sort_order: number | null;
-  external_url: string | null;
-  link_label: string | null;
+  external_url?: string | null;
+  link_label?: string | null;
   completed_at: string | null;
   created_at: string | null;
 };
@@ -90,7 +90,13 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
       LEFT JOIN move_cities fc ON fc.id = mc.from_city_id
       LEFT JOIN move_cities tc ON tc.id = mc.to_city_id
       WHERE mc.user_id = $1
-      ORDER BY mc.created_at DESC
+      ORDER BY
+        CASE
+          WHEN mc.status = 'draft' THEN 0
+          WHEN mc.status = 'done' THEN 2
+          ELSE 1
+        END,
+        mc.created_at DESC
       LIMIT 1
       `,
       [userId]
@@ -125,26 +131,33 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           created_at
         FROM move_case_tasks
         WHERE case_id = $1
-          AND status <> 'hidden'
+          AND status IN ('open', 'done', 'skipped')
         ORDER BY
-          CASE WHEN status IN ('open', 'in_progress') THEN 0 ELSE 1 END,
-          sort_order ASC,
+          CASE
+            WHEN status = 'open' THEN 0
+            WHEN status = 'done' THEN 1
+            ELSE 2
+          END,
+          sort_order ASC NULLS LAST,
           due_date ASC NULLS LAST,
-          created_at ASC
+          created_at ASC NULLS LAST
         `,
         [latestMoveCase.id]
       );
 
       const moduleTasks = moduleTasksResult.rows;
-      const openTasks = moduleTasks.filter(
-        (task) => task.status === 'open' || task.status === 'in_progress'
+
+      const visibleTasks = moduleTasks.filter(
+        (task) => task.status === 'open' || task.status === 'done'
       );
-      const doneModuleTasks = moduleTasks.filter((task) => task.status === 'done');
+
+      const openTasks = visibleTasks.filter((task) => task.status === 'open');
+      const doneModuleTasks = visibleTasks.filter((task) => task.status === 'done');
 
       const progress =
-        moduleTasks.length === 0
+        visibleTasks.length === 0
           ? 0
-          : Math.round((doneModuleTasks.length / moduleTasks.length) * 100);
+          : Math.round((doneModuleTasks.length / visibleTasks.length) * 100);
 
       const nextTask: MoveCaseTaskRow | null = openTasks[0] ?? null;
 
@@ -158,7 +171,7 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           nextTask: nextTask?.title ?? null,
           route: `/move/${latestMoveCase.id}`,
           tone: 'red',
-          statusLabel: 'Aktiv',
+          statusLabel: latestMoveCase.status === 'done' ? 'Abgeschlossen' : 'Aktiv',
         },
       ];
 

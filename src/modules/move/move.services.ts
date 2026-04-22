@@ -437,7 +437,7 @@ function mapOutputRow(row: GenericRow): MoveTaskOutputDto {
     type: asString(pickFirst(row, ['output_type', 'type', 'kind'])),
     title:
       localizedScalar(titleI18n, asString(pickFirst(row, ['title']))) ??
-      asString(payloadRecord.title),
+      null,
     content: payload ?? null,
     created_at:
       asString(pickFirst(row, ['generated_at'])) ??
