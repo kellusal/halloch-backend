@@ -356,6 +356,16 @@ function normalizeActionType(value: string): string {
   return String(value ?? '').trim().toLowerCase();
 }
 
+function normalizeLanguageCode(value: unknown): 'de' | 'fr' | 'en' {
+  const normalized = String(value ?? '')
+    .trim()
+    .toLowerCase();
+
+  if (normalized === 'fr') return 'fr';
+  if (normalized === 'en') return 'en';
+  return 'de';
+}
+
 function mapQuestionOption(option: unknown) {
   if (option && typeof option === 'object' && !Array.isArray(option)) {
     const record = option as Record<string, unknown>;
@@ -839,10 +849,101 @@ function ensureGeneratedDir() {
   return dir;
 }
 
+function splitNonEmptyLines(value: string | null | undefined): string[] {
+  if (!value) return [];
+  return value
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function formatDateByLanguage(
+  value: string | null | undefined,
+  languageCode: 'de' | 'fr' | 'en'
+): string {
+  if (!value) return '';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value);
+  }
+
+  const locale =
+    languageCode === 'fr'
+      ? 'fr-CH'
+      : languageCode === 'en'
+        ? 'en-CH'
+        : 'de-CH';
+
+  return new Intl.DateTimeFormat(locale, {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(date);
+}
+
+function normalizeAddressLines(value: string | null | undefined): string[] {
+  if (!value) return [];
+
+  return value
+    .replace(/,\s*/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function drawLines(
+  doc: PDFKit.PDFDocument,
+  lines: string[],
+  options?: { fontSize?: number; bold?: boolean; lineGap?: number }
+) {
+  if (!lines.length) return;
+
+  doc.font(options?.bold ? 'Helvetica-Bold' : 'Helvetica');
+  doc.fontSize(options?.fontSize ?? 11);
+
+  for (const line of lines) {
+    doc.text(line, {
+      align: 'left',
+      lineGap: options?.lineGap ?? 1,
+    });
+  }
+}
+
+function drawParagraphs(
+  doc: PDFKit.PDFDocument,
+  paragraphs: string[],
+  options?: { fontSize?: number }
+) {
+  doc.font('Helvetica');
+  doc.fontSize(options?.fontSize ?? 11);
+
+  for (const paragraph of paragraphs) {
+    const trimmed = paragraph.trim();
+
+    if (!trimmed) {
+      doc.moveDown();
+      continue;
+    }
+
+    doc.text(trimmed, {
+      align: 'left',
+      lineGap: 2,
+    });
+
+    doc.moveDown();
+  }
+}
+
 async function generatePdfFile(params: {
-  title: string;
-  lines: string[];
   fileName: string;
+  subject: string;
+  senderLines?: string[];
+  recipientLines?: string[];
+  placeDateLine?: string;
+  greeting?: string;
+  bodyParagraphs: string[];
+  closingLines?: string[];
 }): Promise<{ filePath: string; fileUrl: string }> {
   const generatedDir = ensureGeneratedDir();
   const filePath = path.join(generatedDir, params.fileName);
@@ -853,17 +954,48 @@ async function generatePdfFile(params: {
 
     doc.pipe(stream);
 
-    doc.fontSize(20).text(params.title, { align: 'left' });
-    doc.moveDown();
+    const senderLines = (params.senderLines ?? []).filter(Boolean);
+    const recipientLines = (params.recipientLines ?? []).filter(Boolean);
+    const closingLines = (params.closingLines ?? []).filter(Boolean);
 
-    for (const line of params.lines) {
-      if (!line.trim()) {
-        doc.moveDown();
-        continue;
-      }
+    // Absender oben links
+    if (senderLines.length) {
+      drawLines(doc, senderLines, { fontSize: 10, lineGap: 1 });
+      doc.moveDown(2);
+    }
 
-      doc.fontSize(12).text(line, { align: 'left' });
+    // Empfängerblock
+    if (recipientLines.length) {
+      drawLines(doc, recipientLines, { fontSize: 11, lineGap: 1 });
+      doc.moveDown(2);
+    }
+
+    // Ort / Datum
+    if (params.placeDateLine?.trim()) {
+      doc.font('Helvetica');
+      doc.fontSize(11).text(params.placeDateLine.trim(), { align: 'left' });
+      doc.moveDown(2);
+    }
+
+    // Betreff
+    doc.font('Helvetica-Bold');
+    doc.fontSize(13).text(params.subject, { align: 'left' });
+    doc.moveDown(1.5);
+
+    // Anrede
+    if (params.greeting?.trim()) {
+      doc.font('Helvetica');
+      doc.fontSize(11).text(params.greeting.trim(), { align: 'left' });
+      doc.moveDown();
+    }
+
+    // Fliesstext
+    drawParagraphs(doc, params.bodyParagraphs, { fontSize: 11 });
+
+    // Schlussblock
+    if (closingLines.length) {
       doc.moveDown(0.5);
+      drawLines(doc, closingLines, { fontSize: 11, lineGap: 1 });
     }
 
     doc.end();
@@ -957,7 +1089,8 @@ function resolveTaskAction(
 
 function buildActionContext(
   task: MoveCaseTaskDetailDto,
-  moveCase: MoveCaseContextRow | null
+  moveCase: MoveCaseContextRow | null,
+  languageCode: 'de' | 'fr' | 'en' = 'de'
 ) {
   const answersByKey = new Map<string, unknown>();
 
@@ -973,10 +1106,15 @@ function buildActionContext(
   return {
     task,
     moveCase,
+    languageCode,
     answersByKey,
     replacements: {
       recipient_name: asString(answersByKey.get('recipient_name')) ?? '',
       recipient_email: asString(answersByKey.get('recipient_email')) ?? '',
+      recipient_address: asString(answersByKey.get('recipient_address')) ?? '',
+      sender_name: asString(answersByKey.get('sender_name')) ?? '',
+      sender_address: asString(answersByKey.get('sender_address')) ?? '',
+      full_name: asString(answersByKey.get('full_name')) ?? '',
       delivery_method: asString(answersByKey.get('delivery_method')) ?? '',
       termination_date: asString(answersByKey.get('termination_date')) ?? moveDate,
       contract_reference: asString(answersByKey.get('contract_reference')) ?? '',
@@ -985,6 +1123,7 @@ function buildActionContext(
       old_address: asString(answersByKey.get('old_address')) ?? oldAddress,
       new_address: asString(answersByKey.get('new_address')) ?? newAddress,
       move_date: asString(answersByKey.get('move_date')) ?? moveDate,
+      document_date: asString(answersByKey.get('document_date')) ?? '',
       newAddress: asString(answersByKey.get('new_address')) ?? newAddress,
       moveDate: asString(answersByKey.get('move_date')) ?? moveDate,
     },
@@ -1017,7 +1156,11 @@ async function buildEmailActionData(
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const templateRow = await loadOutputTemplate(context.task.templateId, 'email', 'de');
+  const templateRow = await loadOutputTemplate(
+    context.task.templateId,
+    'email',
+    context.languageCode
+  );
 
   const subjectTemplate =
     asString(templateRow?.subject_template) ??
@@ -1044,11 +1187,18 @@ async function buildEmailActionData(
   const subject = replaceTemplateVariables(subjectTemplate, context.replacements);
   const body = replaceTemplateVariables(bodyTemplate, context.replacements);
 
+  const defaultLabel =
+    context.languageCode === 'fr'
+      ? 'Préparer l’e-mail'
+      : context.languageCode === 'en'
+        ? 'Prepare email'
+        : 'E-Mail vorbereiten';
+
   return {
     to,
     subject,
     body,
-    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? 'E-Mail vorbereiten'),
+    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? defaultLabel),
   };
 }
 
@@ -1057,7 +1207,11 @@ async function buildCopyTextActionData(
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const templateRow = await loadOutputTemplate(context.task.templateId, 'copy_text', 'de');
+  const templateRow = await loadOutputTemplate(
+    context.task.templateId,
+    'copy_text',
+    context.languageCode
+  );
 
   const textTemplate =
     asString(templateRow?.body_template) ??
@@ -1069,9 +1223,16 @@ async function buildCopyTextActionData(
 
   const text = replaceTemplateVariables(textTemplate, context.replacements);
 
+  const defaultLabel =
+    context.languageCode === 'fr'
+      ? 'Copier le texte'
+      : context.languageCode === 'en'
+        ? 'Copy text'
+        : 'Text kopieren';
+
   return {
     text,
-    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? 'Text kopieren'),
+    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? defaultLabel),
   };
 }
 
@@ -1088,9 +1249,16 @@ function buildWhatsappActionData(
 
   const text = replaceTemplateVariables(textTemplate, context.replacements);
 
+  const defaultLabel =
+    context.languageCode === 'fr'
+      ? 'Préparer WhatsApp'
+      : context.languageCode === 'en'
+        ? 'Prepare WhatsApp'
+        : 'WhatsApp vorbereiten';
+
   return {
     text,
-    label: localizedPayloadScalar(payload.label, 'WhatsApp vorbereiten'),
+    label: localizedPayloadScalar(payload.label, defaultLabel),
   };
 }
 
@@ -1100,10 +1268,14 @@ async function buildPdfActionData(
   taskId: string
 ) {
   const payload = action.payload ?? {};
-  const templateRow = await loadOutputTemplate(context.task.templateId, 'pdf', 'de');
+  const templateRow = await loadOutputTemplate(
+    context.task.templateId,
+    'pdf',
+    context.languageCode
+  );
   const fileTemplateJson = toRecord(templateRow?.file_template_json);
 
-  const title =
+  const subject =
     asString(fileTemplateJson.title) ??
     localizedPayloadScalar((payload as Record<string, unknown>).title) ??
     context.task.title ??
@@ -1117,18 +1289,99 @@ async function buildPdfActionData(
 
   const body = replaceTemplateVariables(bodyTemplate, context.replacements);
 
+  const greeting =
+    context.languageCode === 'fr'
+      ? 'Madame, Monsieur'
+      : context.languageCode === 'en'
+        ? 'Dear Sir or Madam,'
+        : 'Sehr geehrte Damen und Herren';
+
+  const closing =
+    context.languageCode === 'fr'
+      ? 'Salutations distinguées'
+      : context.languageCode === 'en'
+        ? 'Kind regards'
+        : 'Freundliche Grüsse';
+
+  const recipientName =
+    asString(context.answersByKey.get('recipient_name')) ??
+    context.task.city_service?.office_name ??
+    '';
+
+  const recipientAddress =
+    asString(context.answersByKey.get('recipient_address')) ??
+    context.task.city_service?.office_address ??
+    '';
+
+  const recipientLines = [
+    recipientName,
+    ...normalizeAddressLines(recipientAddress),
+  ].filter(Boolean);
+
+  const senderName =
+    asString(context.answersByKey.get('sender_name')) ??
+    asString(context.answersByKey.get('full_name')) ??
+    '';
+
+  const senderAddress =
+    asString(context.answersByKey.get('sender_address')) ??
+    context.replacements.old_address ??
+    '';
+
+  const senderLines = [
+    senderName,
+    ...normalizeAddressLines(senderAddress),
+  ].filter(Boolean);
+
+  const cityForDate =
+    context.moveCase?.from_city_name ??
+    context.moveCase?.to_city_name ??
+    '';
+
+  const documentDateRaw =
+    asString(context.answersByKey.get('document_date')) ?? new Date().toISOString();
+
+  const formattedDate = formatDateByLanguage(
+    documentDateRaw,
+    context.languageCode
+  );
+
+  const placeDateLine = [cityForDate, formattedDate].filter(Boolean).join(', ');
+
+  const bodyParagraphs = body
+    .split('\n\n')
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+
+  const closingLines = [closing, '', senderName].filter((line, index) => {
+    if (line) return true;
+    return index === 1 && Boolean(senderName);
+  });
+
   const fileName = `task-${taskId}-${Date.now()}.pdf`;
   const pdf = await generatePdfFile({
-    title,
-    lines: body.split('\n'),
     fileName,
+    subject,
+    senderLines,
+    recipientLines,
+    placeDateLine,
+    greeting,
+    bodyParagraphs,
+    closingLines,
   });
+
+  const defaultLabel =
+    context.languageCode === 'fr'
+      ? 'Télécharger le PDF'
+      : context.languageCode === 'en'
+        ? 'Download PDF'
+        : 'PDF herunterladen';
 
   return {
     file_url: pdf.fileUrl,
-    title,
+    title: subject,
     body,
-    label: localizedPayloadScalar(payload.label, 'PDF herunterladen'),
+    label: localizedPayloadScalar(payload.label, defaultLabel),
   };
 }
 
@@ -1479,7 +1732,21 @@ export async function executeMoveCaseTaskAction(
   const beforeDetail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const selectedAction = resolveTaskAction(beforeDetail.task, normalizedActionType);
   const moveCase = await loadMoveCaseContext(caseId);
-  const actionContext = buildActionContext(beforeDetail.task, moveCase);
+
+  const languageAnswer =
+    beforeDetail.task.answers.find((answer) => answer.question_key === 'language') ??
+    beforeDetail.task.answers.find((answer) => answer.question_key === 'language_code');
+
+  const languageCode = normalizeLanguageCode(
+    languageAnswer?.value ?? languageAnswer?.value_text ?? 'de'
+  );
+
+  const actionContext = buildActionContext(
+    beforeDetail.task,
+    moveCase,
+    languageCode
+  );
+
   const client = await pool.connect();
 
   let outputKey = '';
