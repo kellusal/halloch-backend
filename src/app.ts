@@ -1,6 +1,7 @@
 import cors, { type CorsOptionsDelegate } from 'cors';
 import 'dotenv/config';
 import express from 'express';
+import path from 'path';
 import { env } from './config/env';
 import { pool } from './db/pool';
 import { errorMiddleware, notFoundMiddleware } from './middleware/error.middleware';
@@ -10,6 +11,8 @@ import tasksRouter from './modules/tasks/tasks.routes';
 import profileRoutes from './modules/users/profil.routes';
 
 const app = express();
+
+app.use('/generated', express.static(path.join(process.cwd(), 'public/generated')));
 
 const allowedOrigins = env.FRONTEND_ORIGINS;
 

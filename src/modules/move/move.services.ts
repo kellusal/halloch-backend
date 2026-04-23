@@ -38,6 +38,23 @@ type MoveCaseTaskRow = {
   updated_at: string;
 };
 
+type MoveCaseRow = {
+  id: string;
+  move_date: string | null;
+  from_street: string | null;
+  from_house_number: string | null;
+  from_zip: string | null;
+  from_city_name: string | null;
+  to_street: string | null;
+  to_house_number: string | null;
+  to_zip: string | null;
+  to_city_name: string | null;
+  marital_status: string | null;
+  children_count: number | null;
+  health_insurance_name: string | null;
+  employer_name: string | null;
+};
+
 type IdRow = {
   id: string;
 };
@@ -160,7 +177,7 @@ type SaveMoveTaskAnswerInput = {
   answer: unknown;
 };
 
-type SupportedMoveTaskActionType = 'web' | 'email' | 'copy_text' | 'whatsapp';
+type SupportedMoveTaskActionType = 'web' | 'email' | 'copy_text' | 'whatsapp' | 'pdf';
 
 type ExecuteMoveTaskActionResult = {
   action: {
@@ -227,6 +244,37 @@ function mapMoveCaseTask(row: MoveCaseTaskRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
+}
+
+function buildSingleLineAddress(parts: Array<string | null | undefined>): string | null {
+  const filtered = parts
+    .map((item) => (item ?? '').trim())
+    .filter(Boolean);
+
+  return filtered.length ? filtered.join(' ') : null;
+}
+
+function buildFormattedAddress(params: {
+  street?: string | null;
+  houseNumber?: string | null;
+  zip?: string | null;
+  city?: string | null;
+}): string | null {
+  const line1 = buildSingleLineAddress([params.street, params.houseNumber]);
+  const line2 = buildSingleLineAddress([params.zip, params.city]);
+  const lines = [line1, line2].filter(Boolean);
+  return lines.length ? lines.join('\n') : null;
+}
+
+function replaceTemplatePlaceholders(
+  template: string | null,
+  values: Record<string, string | null>
+): string {
+  if (!template) return '';
+
+  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => {
+    return values[key] ?? '';
+  });
 }
 
 function asString(value: unknown): string | null {
@@ -584,7 +632,13 @@ function toJsonValue(value: unknown): unknown {
 }
 
 function isSupportedMoveTaskActionType(value: string): value is SupportedMoveTaskActionType {
-  return value === 'web' || value === 'email' || value === 'copy_text' || value === 'whatsapp';
+  return (
+    value === 'web' ||
+    value === 'email' ||
+    value === 'copy_text' ||
+    value === 'whatsapp' ||
+    value === 'pdf'
+  );
 }
 
 async function findNextRelevantMoveTaskId(
@@ -692,6 +746,162 @@ async function loadOwnedMoveTaskRow(
   return taskResult.rows[0];
 }
 
+async function loadMoveCaseRow(
+  client: { query: typeof pool.query },
+  caseId: string,
+  userId: number | string
+): Promise<MoveCaseRow | null> {
+  const result = await client.query<MoveCaseRow>(
+    `
+      SELECT
+        mc.id,
+        mc.move_date,
+        mc.from_street,
+        mc.from_house_number,
+        mc.from_zip,
+        from_city.name AS from_city_name,
+        mc.to_street,
+        mc.to_house_number,
+        mc.to_zip,
+        to_city.name AS to_city_name,
+        mc.marital_status,
+        mc.children_count,
+        mc.health_insurance_name,
+        mc.employer_name
+      FROM public.move_cases mc
+      LEFT JOIN public.move_cities from_city
+        ON from_city.id = mc.from_city_id
+      LEFT JOIN public.move_cities to_city
+        ON to_city.id = mc.to_city_id
+      WHERE mc.id = $1
+        AND mc.user_id = $2
+      LIMIT 1
+    `,
+    [caseId, userId]
+  );
+
+  return result.rows[0] ?? null;
+}
+
+function buildPrefilledAnswers(
+  questions: MoveTaskQuestionDto[],
+  moveCase: MoveCaseRow | null,
+  storedAnswers: MoveTaskAnswerDto[]
+): MoveTaskAnswerDto[] {
+  if (!moveCase) return storedAnswers;
+
+  const oldAddress = buildFormattedAddress({
+    street: moveCase.from_street,
+    houseNumber: moveCase.from_house_number,
+    zip: moveCase.from_zip,
+    city: moveCase.from_city_name,
+  });
+
+  const newAddress = buildFormattedAddress({
+    street: moveCase.to_street,
+    houseNumber: moveCase.to_house_number,
+    zip: moveCase.to_zip,
+    city: moveCase.to_city_name,
+  });
+
+  const prefillsByKey = new Map<string, string | null>([
+    ['old_address', oldAddress],
+    ['rental_object_address', oldAddress],
+    ['new_address', newAddress],
+    ['move_date', moveCase.move_date ?? null],
+  ]);
+
+  const existingKeys = new Set(
+    storedAnswers
+      .map((answer) => answer.question_key)
+      .filter((key): key is string => Boolean(key))
+  );
+
+  const syntheticAnswers: MoveTaskAnswerDto[] = [];
+
+  for (const question of questions) {
+    const key = question.key;
+    if (!key || existingKeys.has(key)) continue;
+
+    const prefillValue = prefillsByKey.get(key);
+    if (!prefillValue) continue;
+
+    syntheticAnswers.push({
+      id: null,
+      question_id: question.id ?? null,
+      question_key: key,
+      value: prefillValue,
+      value_text: prefillValue,
+      created_at: null,
+      updated_at: null,
+    });
+  }
+
+  return [...storedAnswers, ...syntheticAnswers];
+}
+
+async function loadOutputTemplate(
+  templateId: string,
+  outputType: 'email' | 'pdf' | 'copy_text' | 'whatsapp',
+  languageCode = 'de'
+): Promise<GenericRow | null> {
+  try {
+    const exact = await pool.query<GenericRow>(
+      `
+        SELECT *
+        FROM public.move_task_template_output_templates
+        WHERE task_template_id = $1
+          AND output_type = $2
+          AND language_code = $3
+          AND is_active = true
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [templateId, outputType, languageCode]
+    );
+
+    if (exact.rows[0]) return exact.rows[0];
+
+    const fallbackDe = await pool.query<GenericRow>(
+      `
+        SELECT *
+        FROM public.move_task_template_output_templates
+        WHERE task_template_id = $1
+          AND output_type = $2
+          AND language_code = 'de'
+          AND is_active = true
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [templateId, outputType]
+    );
+
+    if (fallbackDe.rows[0]) return fallbackDe.rows[0];
+
+    const any = await pool.query<GenericRow>(
+      `
+        SELECT *
+        FROM public.move_task_template_output_templates
+        WHERE task_template_id = $1
+          AND output_type = $2
+          AND is_active = true
+        ORDER BY created_at ASC
+        LIMIT 1
+      `,
+      [templateId, outputType]
+    );
+
+    return any.rows[0] ?? null;
+  } catch (error) {
+    warnSchemaFallback(
+      `output-template:${templateId}:${outputType}`,
+      `Output template lookup failed for ${templateId}/${outputType}; falling back to action payload.`,
+      error
+    );
+    return null;
+  }
+}
+
 async function saveMoveTaskOutput(
   client: { query: typeof pool.query },
   caseTaskId: string,
@@ -766,7 +976,7 @@ function resolveTaskAction(
   return matched;
 }
 
-function buildActionContext(task: MoveCaseTaskDetailDto) {
+function buildActionContext(task: MoveCaseTaskDetailDto, moveCase: MoveCaseRow | null) {
   const answersByKey = new Map<string, unknown>();
 
   for (const answer of task.answers) {
@@ -777,9 +987,50 @@ function buildActionContext(task: MoveCaseTaskDetailDto) {
     );
   }
 
+  const oldAddress = moveCase
+    ? buildFormattedAddress({
+        street: moveCase.from_street,
+        houseNumber: moveCase.from_house_number,
+        zip: moveCase.from_zip,
+        city: moveCase.from_city_name,
+      })
+    : null;
+
+  const newAddress = moveCase
+    ? buildFormattedAddress({
+        street: moveCase.to_street,
+        houseNumber: moveCase.to_house_number,
+        zip: moveCase.to_zip,
+        city: moveCase.to_city_name,
+      })
+    : null;
+
   return {
     task,
+    moveCase,
     answersByKey,
+    placeholders: {
+      recipient_name: asString(answersByKey.get('recipient_name')),
+      recipient_email: asString(answersByKey.get('recipient_email')),
+      rental_object_address:
+        asString(answersByKey.get('rental_object_address')) ?? oldAddress,
+      old_address: asString(answersByKey.get('old_address')) ?? oldAddress,
+      new_address: asString(answersByKey.get('new_address')) ?? newAddress,
+      move_date:
+        asString(answersByKey.get('move_date')) ?? moveCase?.move_date ?? null,
+      termination_date: asString(answersByKey.get('termination_date')),
+      contract_reference: asString(answersByKey.get('contract_reference')),
+      provider_name: asString(answersByKey.get('provider_name')),
+      customer_number: asString(answersByKey.get('customer_number')),
+      institution_name: asString(answersByKey.get('institution_name')),
+      institution_email: asString(answersByKey.get('institution_email')),
+      policy_number: asString(answersByKey.get('policy_number')),
+      entry_name: asString(answersByKey.get('entry_name')),
+      channel_hint: asString(answersByKey.get('channel_hint')),
+      dog_name: asString(answersByKey.get('dog_name')),
+      dog_chip_number: asString(answersByKey.get('dog_chip_number')),
+      plate_number: asString(answersByKey.get('plate_number')),
+    } as Record<string, string | null>,
   };
 }
 
@@ -804,20 +1055,23 @@ function buildWebActionData(
   };
 }
 
-function buildEmailActionData(
+async function buildEmailActionData(
   context: ReturnType<typeof buildActionContext>,
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const to =
-    asString(payload.to) ??
-    asString(context.answersByKey.get('recipient_email')) ??
-    context.task.city_service?.office_email ??
-    null;
-  const subject =
+  const templateId = context.task.templateId;
+  const outputTemplate = templateId
+    ? await loadOutputTemplate(templateId, 'email', 'de')
+    : null;
+
+  const subjectTemplate =
+    asString(outputTemplate?.subject_template) ??
     localizedPayloadScalar(payload.subject) ??
     `${context.task.title}`;
-  const body =
+
+  const bodyTemplate =
+    asString(outputTemplate?.body_template) ??
     localizedPayloadScalar(payload.body) ??
     [
       context.task.description,
@@ -826,6 +1080,15 @@ function buildEmailActionData(
     ]
       .filter(Boolean)
       .join('\n\n');
+
+  const subject = replaceTemplatePlaceholders(subjectTemplate, context.placeholders);
+  const body = replaceTemplatePlaceholders(bodyTemplate, context.placeholders);
+
+  const to =
+    asString(payload.to) ??
+    context.placeholders.recipient_email ??
+    context.task.city_service?.office_email ??
+    null;
 
   return {
     to,
@@ -840,16 +1103,52 @@ function buildCopyTextActionData(
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const text =
+  const textTemplate =
     localizedPayloadScalar(payload.text) ??
     localizedPayloadScalar(payload.body) ??
     asString(context.answersByKey.get('copy_text')) ??
     context.task.description ??
     context.task.title;
 
+  const text = replaceTemplatePlaceholders(textTemplate, context.placeholders);
+
   return {
     text,
     label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? 'Text kopieren'),
+  };
+}
+
+async function buildPdfActionData(
+  context: ReturnType<typeof buildActionContext>,
+  action: MoveTaskActionDto
+) {
+  const payload = action.payload ?? {};
+  const templateId = context.task.templateId;
+  const outputTemplate = templateId
+    ? await loadOutputTemplate(templateId, 'pdf', 'de')
+    : null;
+
+  const fileTemplateJson = toRecord(outputTemplate?.file_template_json);
+  const titleTemplate =
+    asString(fileTemplateJson.title) ??
+    localizedPayloadScalar(payload.label) ??
+    context.task.title ??
+    'Dokument';
+
+  const bodyTemplate =
+    asString(fileTemplateJson.body) ??
+    context.task.description ??
+    '';
+
+  const title = replaceTemplatePlaceholders(titleTemplate, context.placeholders);
+  const body = replaceTemplatePlaceholders(bodyTemplate, context.placeholders);
+
+  return {
+    title,
+    body,
+    file_name: `${title.replace(/[^\p{L}\p{N}\-_ ]/gu, '').trim() || 'dokument'}.txt`,
+    mime_type: 'text/plain',
+    label: localizedPayloadScalar(payload.label, 'PDF herunterladen'),
   };
 }
 
@@ -858,11 +1157,13 @@ function buildWhatsappActionData(
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const text =
+  const textTemplate =
     localizedPayloadScalar(payload.message) ??
     localizedPayloadScalar(payload.body) ??
     context.task.description ??
     context.task.title;
+
+  const text = replaceTemplatePlaceholders(textTemplate, context.placeholders);
 
   return {
     text,
@@ -973,7 +1274,7 @@ export async function getMoveCaseTaskDetail(
   const taskRow = await loadOwnedMoveTaskRow(pool, caseId, taskId, userId);
   const baseTask = mapMoveCaseTask(taskRow);
 
-  const [questionRows, answerRows, outputRows, entityRows, nextTaskId] =
+  const [questionRows, answerRows, outputRows, entityRows, nextTaskId, moveCase] =
     await Promise.all([
       taskRow.template_id
         ? loadOptionalTableRows(
@@ -986,12 +1287,15 @@ export async function getMoveCaseTaskDetail(
       loadOptionalTableRows('public.move_case_task_outputs', 'case_task_id', taskId),
       loadOptionalTableRows('public.move_case_task_entities', 'case_task_id', taskId),
       findNextRelevantMoveTaskId(caseId, taskId),
+      loadMoveCaseRow(pool, caseId, userId),
     ]);
 
   const questions = questionRows
     .map(mapQuestionRow)
     .sort((a, b) => a.sort_order - b.sort_order);
-  const answers = answerRows.map(mapAnswerRow);
+
+  const storedAnswers = answerRows.map(mapAnswerRow);
+  const answers = buildPrefilledAnswers(questions, moveCase, storedAnswers);
   const outputs = outputRows.map(mapOutputRow);
   const entities = entityRows.map(mapEntityRow);
 
@@ -1213,7 +1517,8 @@ export async function executeMoveCaseTaskAction(
 
   const beforeDetail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const selectedAction = resolveTaskAction(beforeDetail.task, actionType);
-  const actionContext = buildActionContext(beforeDetail.task);
+  const moveCase = await loadMoveCaseRow(pool, caseId, userId);
+  const actionContext = buildActionContext(beforeDetail.task, moveCase);
   const client = await pool.connect();
   let outputKey = '';
   let outputType = '';
@@ -1232,7 +1537,7 @@ export async function executeMoveCaseTaskAction(
       outputType = 'link_opened';
       outputTitle = 'Link geöffnet';
     } else if (actionType === 'email') {
-      actionData = buildEmailActionData(actionContext, selectedAction);
+      actionData = await buildEmailActionData(actionContext, selectedAction);
       outputKey = 'email_draft';
       outputType = 'email_draft';
       outputTitle = 'E-Mail Entwurf';
@@ -1241,6 +1546,11 @@ export async function executeMoveCaseTaskAction(
       outputKey = 'copy_text';
       outputType = 'copy_text';
       outputTitle = 'Kopiertext';
+    } else if (actionType === 'pdf') {
+      actionData = await buildPdfActionData(actionContext, selectedAction);
+      outputKey = 'pdf_document';
+      outputType = 'pdf';
+      outputTitle = asString(actionData.title) ?? 'PDF Dokument';
     } else {
       actionData = buildWhatsappActionData(actionContext, selectedAction);
       outputKey = 'whatsapp_draft';
