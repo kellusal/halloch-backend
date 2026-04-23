@@ -352,6 +352,10 @@ function localizedPayloadScalar(
   return asString(value) ?? fallback ?? null;
 }
 
+function normalizeActionType(value: string): string {
+  return String(value ?? '').trim().toLowerCase();
+}
+
 function mapQuestionOption(option: unknown) {
   if (option && typeof option === 'object' && !Array.isArray(option)) {
     const record = option as Record<string, unknown>;
@@ -622,12 +626,14 @@ function toJsonValue(value: unknown): unknown {
 function isSupportedMoveTaskActionType(
   value: string
 ): value is SupportedMoveTaskActionType {
+  const normalized = normalizeActionType(value);
+
   return (
-    value === 'web' ||
-    value === 'email' ||
-    value === 'copy_text' ||
-    value === 'whatsapp' ||
-    value === 'pdf'
+    normalized === 'web' ||
+    normalized === 'email' ||
+    normalized === 'copy_text' ||
+    normalized === 'whatsapp' ||
+    normalized === 'pdf'
   );
 }
 
@@ -938,7 +944,10 @@ function resolveTaskAction(
     (action): action is MoveTaskActionDto => Boolean(action)
   );
 
-  const matched = candidates.find((action) => action.type === actionType);
+  const matched = candidates.find(
+    (action) => normalizeActionType(action.type) === actionType
+  );
+
   if (!matched) {
     throw new Error('Move task action not available');
   }
@@ -1272,13 +1281,13 @@ export async function getMoveCaseTaskDetail(
       entities,
       primary_action: taskRow.action_type
         ? {
-            type: taskRow.action_type,
+            type: normalizeActionType(taskRow.action_type),
             payload: (taskRow.action_payload ?? null) as Record<string, unknown> | null,
           }
         : null,
       secondary_action: taskRow.secondary_action_type
         ? {
-            type: taskRow.secondary_action_type,
+            type: normalizeActionType(taskRow.secondary_action_type),
             payload: (taskRow.secondary_action_payload ?? null) as Record<string, unknown> | null,
           }
         : null,
@@ -1461,12 +1470,14 @@ export async function executeMoveCaseTaskAction(
     throw new Error('Task id is required');
   }
 
-  if (!isSupportedMoveTaskActionType(actionType)) {
+  const normalizedActionType = normalizeActionType(actionType);
+
+  if (!isSupportedMoveTaskActionType(normalizedActionType)) {
     throw new Error('Unsupported move task action');
   }
 
   const beforeDetail = await getMoveCaseTaskDetail(caseId, taskId, userId);
-  const selectedAction = resolveTaskAction(beforeDetail.task, actionType);
+  const selectedAction = resolveTaskAction(beforeDetail.task, normalizedActionType);
   const moveCase = await loadMoveCaseContext(caseId);
   const actionContext = buildActionContext(beforeDetail.task, moveCase);
   const client = await pool.connect();
@@ -1482,22 +1493,22 @@ export async function executeMoveCaseTaskAction(
 
     let actionData: Record<string, unknown>;
 
-    if (actionType === 'web') {
+    if (normalizedActionType === 'web') {
       actionData = buildWebActionData(beforeDetail.task, selectedAction);
       outputKey = 'link_opened';
       outputType = 'link_opened';
       outputTitle = 'Link geöffnet';
-    } else if (actionType === 'email') {
+    } else if (normalizedActionType === 'email') {
       actionData = await buildEmailActionData(actionContext, selectedAction);
       outputKey = 'email_draft';
       outputType = 'email_draft';
       outputTitle = 'E-Mail Entwurf';
-    } else if (actionType === 'copy_text') {
+    } else if (normalizedActionType === 'copy_text') {
       actionData = await buildCopyTextActionData(actionContext, selectedAction);
       outputKey = 'copy_text';
       outputType = 'copy_text';
       outputTitle = 'Kopiertext';
-    } else if (actionType === 'whatsapp') {
+    } else if (normalizedActionType === 'whatsapp') {
       actionData = buildWhatsappActionData(actionContext, selectedAction);
       outputKey = 'whatsapp_draft';
       outputType = 'whatsapp_draft';
@@ -1545,7 +1556,7 @@ export async function executeMoveCaseTaskAction(
 
   return {
     action: {
-      type: actionType,
+      type: normalizedActionType,
       status: 'prepared',
       data:
         createdOutput?.content && typeof createdOutput.content === 'object'
