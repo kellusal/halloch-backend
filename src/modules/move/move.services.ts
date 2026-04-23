@@ -1,3 +1,7 @@
+import fs from 'fs';
+import path from 'path';
+import PDFDocument = require('pdfkit');
+
 import { pool } from '../../db/pool';
 import { refreshMoveCaseTasks } from './move.task-sync';
 
@@ -36,23 +40,6 @@ type MoveCaseTaskRow = {
   completed_at: string | null;
   created_at: string;
   updated_at: string;
-};
-
-type MoveCaseRow = {
-  id: string;
-  move_date: string | null;
-  from_street: string | null;
-  from_house_number: string | null;
-  from_zip: string | null;
-  from_city_name: string | null;
-  to_street: string | null;
-  to_house_number: string | null;
-  to_zip: string | null;
-  to_city_name: string | null;
-  marital_status: string | null;
-  children_count: number | null;
-  health_insurance_name: string | null;
-  employer_name: string | null;
 };
 
 type IdRow = {
@@ -177,7 +164,12 @@ type SaveMoveTaskAnswerInput = {
   answer: unknown;
 };
 
-type SupportedMoveTaskActionType = 'web' | 'email' | 'copy_text' | 'whatsapp' | 'pdf';
+type SupportedMoveTaskActionType =
+  | 'web'
+  | 'email'
+  | 'copy_text'
+  | 'whatsapp'
+  | 'pdf';
 
 type ExecuteMoveTaskActionResult = {
   action: {
@@ -190,6 +182,19 @@ type ExecuteMoveTaskActionResult = {
   nextTaskId: string | null;
 };
 
+type MoveCaseContextRow = {
+  id: string;
+  move_date: string | null;
+  from_street: string | null;
+  from_house_number: string | null;
+  from_zip: string | null;
+  to_street: string | null;
+  to_house_number: string | null;
+  to_zip: string | null;
+  from_city_name: string | null;
+  to_city_name: string | null;
+};
+
 const schemaWarningCache = new Set<string>();
 
 function warnSchemaFallback(key: string, message: string, error?: unknown) {
@@ -200,9 +205,7 @@ function warnSchemaFallback(key: string, message: string, error?: unknown) {
   schemaWarningCache.add(key);
 
   const details =
-    error instanceof Error && error.message
-      ? ` ${error.message}`
-      : '';
+    error instanceof Error && error.message ? ` ${error.message}` : '';
 
   console.warn(`[move] ${message}${details}`);
 }
@@ -244,37 +247,6 @@ function mapMoveCaseTask(row: MoveCaseTaskRow) {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-}
-
-function buildSingleLineAddress(parts: Array<string | null | undefined>): string | null {
-  const filtered = parts
-    .map((item) => (item ?? '').trim())
-    .filter(Boolean);
-
-  return filtered.length ? filtered.join(' ') : null;
-}
-
-function buildFormattedAddress(params: {
-  street?: string | null;
-  houseNumber?: string | null;
-  zip?: string | null;
-  city?: string | null;
-}): string | null {
-  const line1 = buildSingleLineAddress([params.street, params.houseNumber]);
-  const line2 = buildSingleLineAddress([params.zip, params.city]);
-  const lines = [line1, line2].filter(Boolean);
-  return lines.length ? lines.join('\n') : null;
-}
-
-function replaceTemplatePlaceholders(
-  template: string | null,
-  values: Record<string, string | null>
-): string {
-  if (!template) return '';
-
-  return template.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key: string) => {
-    return values[key] ?? '';
-  });
 }
 
 function asString(value: unknown): string | null {
@@ -383,17 +355,18 @@ function localizedPayloadScalar(
 function mapQuestionOption(option: unknown) {
   if (option && typeof option === 'object' && !Array.isArray(option)) {
     const record = option as Record<string, unknown>;
-    const labelI18n = record.label && typeof record.label === 'object'
-      ? {
-          de: asString((record.label as Record<string, unknown>).de),
-          fr: asString((record.label as Record<string, unknown>).fr),
-          en: asString((record.label as Record<string, unknown>).en),
-        }
-      : {
-          de: asString(record.label_de) ?? asString(record.label),
-          fr: asString(record.label_fr) ?? asString(record.label),
-          en: asString(record.label_en) ?? asString(record.label),
-        };
+    const labelI18n =
+      record.label && typeof record.label === 'object'
+        ? {
+            de: asString((record.label as Record<string, unknown>).de),
+            fr: asString((record.label as Record<string, unknown>).fr),
+            en: asString((record.label as Record<string, unknown>).en),
+          }
+        : {
+            de: asString(record.label_de) ?? asString(record.label),
+            fr: asString(record.label_fr) ?? asString(record.label),
+            en: asString(record.label_en) ?? asString(record.label),
+          };
 
     return {
       value: asString(record.value) ?? '',
@@ -425,8 +398,14 @@ function mapQuestionRow(row: GenericRow): MoveTaskQuestionDto {
     key: asString(pickFirst(row, ['question_key', 'field_key', 'key', 'slug'])),
     type: asString(pickFirst(row, ['question_type', 'type', 'input_type'])),
     label: localizedScalar(labelI18n, asString(pickFirst(row, ['label']))),
-    description: localizedScalar(descriptionI18n, asString(pickFirst(row, ['description']))),
-    placeholder: localizedScalar(placeholderI18n, asString(pickFirst(row, ['placeholder']))),
+    description: localizedScalar(
+      descriptionI18n,
+      asString(pickFirst(row, ['description']))
+    ),
+    placeholder: localizedScalar(
+      placeholderI18n,
+      asString(pickFirst(row, ['placeholder']))
+    ),
     help_text: localizedScalar(
       helpTextI18n,
       asString(pickFirst(row, ['help_text', 'helper_text', 'hint']))
@@ -444,7 +423,9 @@ function mapQuestionRow(row: GenericRow): MoveTaskQuestionDto {
 }
 
 function mapAnswerRow(row: GenericRow): MoveTaskAnswerDto {
-  const value = parseJsonLike(pickFirst(row, ['answer_json', 'value_json', 'answer', 'value']));
+  const value = parseJsonLike(
+    pickFirst(row, ['answer_json', 'value_json', 'answer', 'value'])
+  );
 
   return {
     id: asString(pickFirst(row, ['id'])),
@@ -468,13 +449,14 @@ function mapOutputRow(row: GenericRow): MoveTaskOutputDto {
       ? (payload as Record<string, unknown>)
       : {};
 
-  const titleI18n = payloadRecord.title && typeof payloadRecord.title === 'object'
-    ? {
-        de: asString((payloadRecord.title as Record<string, unknown>).de),
-        fr: asString((payloadRecord.title as Record<string, unknown>).fr),
-        en: asString((payloadRecord.title as Record<string, unknown>).en),
-      }
-    : localizedValue(row, 'title');
+  const titleI18n =
+    payloadRecord.title && typeof payloadRecord.title === 'object'
+      ? {
+          de: asString((payloadRecord.title as Record<string, unknown>).de),
+          fr: asString((payloadRecord.title as Record<string, unknown>).fr),
+          en: asString((payloadRecord.title as Record<string, unknown>).en),
+        }
+      : localizedValue(row, 'title');
 
   return {
     id: asString(pickFirst(row, ['id'])),
@@ -484,8 +466,7 @@ function mapOutputRow(row: GenericRow): MoveTaskOutputDto {
       asString(pickFirst(row, ['output_type', 'type', 'kind'])),
     type: asString(pickFirst(row, ['output_type', 'type', 'kind'])),
     title:
-      localizedScalar(titleI18n, asString(pickFirst(row, ['title']))) ??
-      null,
+      localizedScalar(titleI18n, asString(pickFirst(row, ['title']))) ?? null,
     content: payload ?? null,
     created_at:
       asString(pickFirst(row, ['generated_at'])) ??
@@ -512,7 +493,9 @@ function hasAnswerValue(value: unknown): boolean {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim().length > 0;
   if (Array.isArray(value)) return value.length > 0;
-  if (typeof value === 'object') return Object.keys(value as Record<string, unknown>).length > 0;
+  if (typeof value === 'object') {
+    return Object.keys(value as Record<string, unknown>).length > 0;
+  }
   return true;
 }
 
@@ -560,7 +543,11 @@ function buildFormCompletionSummary(
   };
 }
 
-async function loadOptionalTableRows(tableName: string, whereColumn: string, whereValue: string) {
+async function loadOptionalTableRows(
+  tableName: string,
+  whereColumn: string,
+  whereValue: string
+) {
   try {
     const result = await pool.query<GenericRow>(
       `SELECT * FROM ${tableName} WHERE ${whereColumn} = $1 ORDER BY created_at ASC, id ASC`,
@@ -569,9 +556,10 @@ async function loadOptionalTableRows(tableName: string, whereColumn: string, whe
 
     return result.rows;
   } catch (error) {
-    const code = typeof error === 'object' && error !== null && 'code' in error
-      ? String((error as { code?: unknown }).code ?? '')
-      : '';
+    const code =
+      typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code ?? '')
+        : '';
 
     if (code === '42P01' || code === '42703') {
       warnSchemaFallback(
@@ -631,7 +619,9 @@ function toJsonValue(value: unknown): unknown {
   return value;
 }
 
-function isSupportedMoveTaskActionType(value: string): value is SupportedMoveTaskActionType {
+function isSupportedMoveTaskActionType(
+  value: string
+): value is SupportedMoveTaskActionType {
   return (
     value === 'web' ||
     value === 'email' ||
@@ -746,12 +736,8 @@ async function loadOwnedMoveTaskRow(
   return taskResult.rows[0];
 }
 
-async function loadMoveCaseRow(
-  client: { query: typeof pool.query },
-  caseId: string,
-  userId: number | string
-): Promise<MoveCaseRow | null> {
-  const result = await client.query<MoveCaseRow>(
+async function loadMoveCaseContext(caseId: string): Promise<MoveCaseContextRow | null> {
+  const result = await pool.query<MoveCaseContextRow>(
     `
       SELECT
         mc.id,
@@ -759,94 +745,64 @@ async function loadMoveCaseRow(
         mc.from_street,
         mc.from_house_number,
         mc.from_zip,
-        from_city.name AS from_city_name,
         mc.to_street,
         mc.to_house_number,
         mc.to_zip,
-        to_city.name AS to_city_name,
-        mc.marital_status,
-        mc.children_count,
-        mc.health_insurance_name,
-        mc.employer_name
+        fc.name AS from_city_name,
+        tc.name AS to_city_name
       FROM public.move_cases mc
-      LEFT JOIN public.move_cities from_city
-        ON from_city.id = mc.from_city_id
-      LEFT JOIN public.move_cities to_city
-        ON to_city.id = mc.to_city_id
+      LEFT JOIN public.move_cities fc ON fc.id = mc.from_city_id
+      LEFT JOIN public.move_cities tc ON tc.id = mc.to_city_id
       WHERE mc.id = $1
-        AND mc.user_id = $2
       LIMIT 1
     `,
-    [caseId, userId]
+    [caseId]
   );
 
   return result.rows[0] ?? null;
 }
 
-function buildPrefilledAnswers(
-  questions: MoveTaskQuestionDto[],
-  moveCase: MoveCaseRow | null,
-  storedAnswers: MoveTaskAnswerDto[]
-): MoveTaskAnswerDto[] {
-  if (!moveCase) return storedAnswers;
+function formatAddress(parts: Array<string | null | undefined>): string {
+  return parts
+    .map((part) => asString(part))
+    .filter((part): part is string => Boolean(part))
+    .join(' ');
+}
 
-  const oldAddress = buildFormattedAddress({
-    street: moveCase.from_street,
-    houseNumber: moveCase.from_house_number,
-    zip: moveCase.from_zip,
-    city: moveCase.from_city_name,
+function buildOldAddress(moveCase: MoveCaseContextRow | null): string {
+  if (!moveCase) return '';
+  const line1 = formatAddress([moveCase.from_street, moveCase.from_house_number]);
+  const line2 = formatAddress([moveCase.from_zip, moveCase.from_city_name]);
+  return [line1, line2].filter(Boolean).join(', ');
+}
+
+function buildNewAddress(moveCase: MoveCaseContextRow | null): string {
+  if (!moveCase) return '';
+  const line1 = formatAddress([moveCase.to_street, moveCase.to_house_number]);
+  const line2 = formatAddress([moveCase.to_zip, moveCase.to_city_name]);
+  return [line1, line2].filter(Boolean).join(', ');
+}
+
+function replaceTemplateVariables(
+  template: string | null,
+  values: Record<string, string | null | undefined>
+): string {
+  if (!template) return '';
+
+  return template.replace(/{{\s*([a-zA-Z0-9_]+)\s*}}/g, (_, key: string) => {
+    return values[key] ?? '';
   });
-
-  const newAddress = buildFormattedAddress({
-    street: moveCase.to_street,
-    houseNumber: moveCase.to_house_number,
-    zip: moveCase.to_zip,
-    city: moveCase.to_city_name,
-  });
-
-  const prefillsByKey = new Map<string, string | null>([
-    ['old_address', oldAddress],
-    ['rental_object_address', oldAddress],
-    ['new_address', newAddress],
-    ['move_date', moveCase.move_date ?? null],
-  ]);
-
-  const existingKeys = new Set(
-    storedAnswers
-      .map((answer) => answer.question_key)
-      .filter((key): key is string => Boolean(key))
-  );
-
-  const syntheticAnswers: MoveTaskAnswerDto[] = [];
-
-  for (const question of questions) {
-    const key = question.key;
-    if (!key || existingKeys.has(key)) continue;
-
-    const prefillValue = prefillsByKey.get(key);
-    if (!prefillValue) continue;
-
-    syntheticAnswers.push({
-      id: null,
-      question_id: question.id ?? null,
-      question_key: key,
-      value: prefillValue,
-      value_text: prefillValue,
-      created_at: null,
-      updated_at: null,
-    });
-  }
-
-  return [...storedAnswers, ...syntheticAnswers];
 }
 
 async function loadOutputTemplate(
-  templateId: string,
-  outputType: 'email' | 'pdf' | 'copy_text' | 'whatsapp',
-  languageCode = 'de'
+  taskTemplateId: string | null,
+  outputType: 'email' | 'copy_text' | 'pdf',
+  languageCode: 'de' | 'fr' | 'en' = 'de'
 ): Promise<GenericRow | null> {
+  if (!taskTemplateId) return null;
+
   try {
-    const exact = await pool.query<GenericRow>(
+    const result = await pool.query<GenericRow>(
       `
         SELECT *
         FROM public.move_task_template_output_templates
@@ -854,52 +810,66 @@ async function loadOutputTemplate(
           AND output_type = $2
           AND language_code = $3
           AND is_active = true
-        ORDER BY created_at ASC
+        ORDER BY created_at DESC
         LIMIT 1
       `,
-      [templateId, outputType, languageCode]
+      [taskTemplateId, outputType, languageCode]
     );
 
-    if (exact.rows[0]) return exact.rows[0];
-
-    const fallbackDe = await pool.query<GenericRow>(
-      `
-        SELECT *
-        FROM public.move_task_template_output_templates
-        WHERE task_template_id = $1
-          AND output_type = $2
-          AND language_code = 'de'
-          AND is_active = true
-        ORDER BY created_at ASC
-        LIMIT 1
-      `,
-      [templateId, outputType]
-    );
-
-    if (fallbackDe.rows[0]) return fallbackDe.rows[0];
-
-    const any = await pool.query<GenericRow>(
-      `
-        SELECT *
-        FROM public.move_task_template_output_templates
-        WHERE task_template_id = $1
-          AND output_type = $2
-          AND is_active = true
-        ORDER BY created_at ASC
-        LIMIT 1
-      `,
-      [templateId, outputType]
-    );
-
-    return any.rows[0] ?? null;
+    return result.rows[0] ?? null;
   } catch (error) {
     warnSchemaFallback(
-      `output-template:${templateId}:${outputType}`,
-      `Output template lookup failed for ${templateId}/${outputType}; falling back to action payload.`,
+      `output-template:${taskTemplateId}:${outputType}:${languageCode}`,
+      'move_task_template_output_templates unavailable; action falls back to payload/default.',
       error
     );
     return null;
   }
+}
+
+function ensureGeneratedDir() {
+  const dir = path.join(process.cwd(), 'public', 'generated');
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+async function generatePdfFile(params: {
+  title: string;
+  lines: string[];
+  fileName: string;
+}): Promise<{ filePath: string; fileUrl: string }> {
+  const generatedDir = ensureGeneratedDir();
+  const filePath = path.join(generatedDir, params.fileName);
+
+  await new Promise<void>((resolve, reject) => {
+    const doc = new PDFDocument({ size: 'A4', margin: 50 });
+    const stream = fs.createWriteStream(filePath);
+
+    doc.pipe(stream);
+
+    doc.fontSize(20).text(params.title, { align: 'left' });
+    doc.moveDown();
+
+    for (const line of params.lines) {
+      if (!line.trim()) {
+        doc.moveDown();
+        continue;
+      }
+
+      doc.fontSize(12).text(line, { align: 'left' });
+      doc.moveDown(0.5);
+    }
+
+    doc.end();
+
+    stream.on('finish', () => resolve());
+    stream.on('error', (error) => reject(error));
+  });
+
+  return {
+    filePath,
+    fileUrl: `https://api.halloch.ch/generated/${params.fileName}`,
+  };
 }
 
 async function saveMoveTaskOutput(
@@ -976,61 +946,39 @@ function resolveTaskAction(
   return matched;
 }
 
-function buildActionContext(task: MoveCaseTaskDetailDto, moveCase: MoveCaseRow | null) {
+function buildActionContext(
+  task: MoveCaseTaskDetailDto,
+  moveCase: MoveCaseContextRow | null
+) {
   const answersByKey = new Map<string, unknown>();
 
   for (const answer of task.answers) {
     if (!answer.question_key) continue;
-    answersByKey.set(
-      answer.question_key,
-      answer.value ?? answer.value_text ?? null
-    );
+    answersByKey.set(answer.question_key, answer.value ?? answer.value_text ?? null);
   }
 
-  const oldAddress = moveCase
-    ? buildFormattedAddress({
-        street: moveCase.from_street,
-        houseNumber: moveCase.from_house_number,
-        zip: moveCase.from_zip,
-        city: moveCase.from_city_name,
-      })
-    : null;
-
-  const newAddress = moveCase
-    ? buildFormattedAddress({
-        street: moveCase.to_street,
-        houseNumber: moveCase.to_house_number,
-        zip: moveCase.to_zip,
-        city: moveCase.to_city_name,
-      })
-    : null;
+  const oldAddress = buildOldAddress(moveCase);
+  const newAddress = buildNewAddress(moveCase);
+  const moveDate = asString(moveCase?.move_date) ?? '';
 
   return {
     task,
     moveCase,
     answersByKey,
-    placeholders: {
-      recipient_name: asString(answersByKey.get('recipient_name')),
-      recipient_email: asString(answersByKey.get('recipient_email')),
+    replacements: {
+      recipient_name: asString(answersByKey.get('recipient_name')) ?? '',
+      recipient_email: asString(answersByKey.get('recipient_email')) ?? '',
+      delivery_method: asString(answersByKey.get('delivery_method')) ?? '',
+      termination_date: asString(answersByKey.get('termination_date')) ?? moveDate,
+      contract_reference: asString(answersByKey.get('contract_reference')) ?? '',
       rental_object_address:
         asString(answersByKey.get('rental_object_address')) ?? oldAddress,
       old_address: asString(answersByKey.get('old_address')) ?? oldAddress,
       new_address: asString(answersByKey.get('new_address')) ?? newAddress,
-      move_date:
-        asString(answersByKey.get('move_date')) ?? moveCase?.move_date ?? null,
-      termination_date: asString(answersByKey.get('termination_date')),
-      contract_reference: asString(answersByKey.get('contract_reference')),
-      provider_name: asString(answersByKey.get('provider_name')),
-      customer_number: asString(answersByKey.get('customer_number')),
-      institution_name: asString(answersByKey.get('institution_name')),
-      institution_email: asString(answersByKey.get('institution_email')),
-      policy_number: asString(answersByKey.get('policy_number')),
-      entry_name: asString(answersByKey.get('entry_name')),
-      channel_hint: asString(answersByKey.get('channel_hint')),
-      dog_name: asString(answersByKey.get('dog_name')),
-      dog_chip_number: asString(answersByKey.get('dog_chip_number')),
-      plate_number: asString(answersByKey.get('plate_number')),
-    } as Record<string, string | null>,
+      move_date: asString(answersByKey.get('move_date')) ?? moveDate,
+      newAddress: asString(answersByKey.get('new_address')) ?? newAddress,
+      moveDate: asString(answersByKey.get('move_date')) ?? moveDate,
+    },
   };
 }
 
@@ -1060,18 +1008,15 @@ async function buildEmailActionData(
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
-  const templateId = context.task.templateId;
-  const outputTemplate = templateId
-    ? await loadOutputTemplate(templateId, 'email', 'de')
-    : null;
+  const templateRow = await loadOutputTemplate(context.task.templateId, 'email', 'de');
 
   const subjectTemplate =
-    asString(outputTemplate?.subject_template) ??
+    asString(templateRow?.subject_template) ??
     localizedPayloadScalar(payload.subject) ??
     `${context.task.title}`;
 
   const bodyTemplate =
-    asString(outputTemplate?.body_template) ??
+    asString(templateRow?.body_template) ??
     localizedPayloadScalar(payload.body) ??
     [
       context.task.description,
@@ -1081,14 +1026,14 @@ async function buildEmailActionData(
       .filter(Boolean)
       .join('\n\n');
 
-  const subject = replaceTemplatePlaceholders(subjectTemplate, context.placeholders);
-  const body = replaceTemplatePlaceholders(bodyTemplate, context.placeholders);
-
   const to =
     asString(payload.to) ??
-    context.placeholders.recipient_email ??
+    asString(context.answersByKey.get('recipient_email')) ??
     context.task.city_service?.office_email ??
     null;
+
+  const subject = replaceTemplateVariables(subjectTemplate, context.replacements);
+  const body = replaceTemplateVariables(bodyTemplate, context.replacements);
 
   return {
     to,
@@ -1098,57 +1043,26 @@ async function buildEmailActionData(
   };
 }
 
-function buildCopyTextActionData(
+async function buildCopyTextActionData(
   context: ReturnType<typeof buildActionContext>,
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
+  const templateRow = await loadOutputTemplate(context.task.templateId, 'copy_text', 'de');
+
   const textTemplate =
+    asString(templateRow?.body_template) ??
     localizedPayloadScalar(payload.text) ??
     localizedPayloadScalar(payload.body) ??
     asString(context.answersByKey.get('copy_text')) ??
     context.task.description ??
     context.task.title;
 
-  const text = replaceTemplatePlaceholders(textTemplate, context.placeholders);
+  const text = replaceTemplateVariables(textTemplate, context.replacements);
 
   return {
     text,
     label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? 'Text kopieren'),
-  };
-}
-
-async function buildPdfActionData(
-  context: ReturnType<typeof buildActionContext>,
-  action: MoveTaskActionDto
-) {
-  const payload = action.payload ?? {};
-  const templateId = context.task.templateId;
-  const outputTemplate = templateId
-    ? await loadOutputTemplate(templateId, 'pdf', 'de')
-    : null;
-
-  const fileTemplateJson = toRecord(outputTemplate?.file_template_json);
-  const titleTemplate =
-    asString(fileTemplateJson.title) ??
-    localizedPayloadScalar(payload.label) ??
-    context.task.title ??
-    'Dokument';
-
-  const bodyTemplate =
-    asString(fileTemplateJson.body) ??
-    context.task.description ??
-    '';
-
-  const title = replaceTemplatePlaceholders(titleTemplate, context.placeholders);
-  const body = replaceTemplatePlaceholders(bodyTemplate, context.placeholders);
-
-  return {
-    title,
-    body,
-    file_name: `${title.replace(/[^\p{L}\p{N}\-_ ]/gu, '').trim() || 'dokument'}.txt`,
-    mime_type: 'text/plain',
-    label: localizedPayloadScalar(payload.label, 'PDF herunterladen'),
   };
 }
 
@@ -1163,11 +1077,49 @@ function buildWhatsappActionData(
     context.task.description ??
     context.task.title;
 
-  const text = replaceTemplatePlaceholders(textTemplate, context.placeholders);
+  const text = replaceTemplateVariables(textTemplate, context.replacements);
 
   return {
     text,
     label: localizedPayloadScalar(payload.label, 'WhatsApp vorbereiten'),
+  };
+}
+
+async function buildPdfActionData(
+  context: ReturnType<typeof buildActionContext>,
+  action: MoveTaskActionDto,
+  taskId: string
+) {
+  const payload = action.payload ?? {};
+  const templateRow = await loadOutputTemplate(context.task.templateId, 'pdf', 'de');
+  const fileTemplateJson = toRecord(templateRow?.file_template_json);
+
+  const title =
+    asString(fileTemplateJson.title) ??
+    localizedPayloadScalar((payload as Record<string, unknown>).title) ??
+    context.task.title ??
+    'Dokument';
+
+  const bodyTemplate =
+    asString(fileTemplateJson.body) ??
+    localizedPayloadScalar((payload as Record<string, unknown>).body) ??
+    context.task.description ??
+    '';
+
+  const body = replaceTemplateVariables(bodyTemplate, context.replacements);
+
+  const fileName = `task-${taskId}-${Date.now()}.pdf`;
+  const pdf = await generatePdfFile({
+    title,
+    lines: body.split('\n'),
+    fileName,
+  });
+
+  return {
+    file_url: pdf.fileUrl,
+    title,
+    body,
+    label: localizedPayloadScalar(payload.label, 'PDF herunterladen'),
   };
 }
 
@@ -1274,7 +1226,7 @@ export async function getMoveCaseTaskDetail(
   const taskRow = await loadOwnedMoveTaskRow(pool, caseId, taskId, userId);
   const baseTask = mapMoveCaseTask(taskRow);
 
-  const [questionRows, answerRows, outputRows, entityRows, nextTaskId, moveCase] =
+  const [questionRows, answerRows, outputRows, entityRows, nextTaskId] =
     await Promise.all([
       taskRow.template_id
         ? loadOptionalTableRows(
@@ -1287,15 +1239,12 @@ export async function getMoveCaseTaskDetail(
       loadOptionalTableRows('public.move_case_task_outputs', 'case_task_id', taskId),
       loadOptionalTableRows('public.move_case_task_entities', 'case_task_id', taskId),
       findNextRelevantMoveTaskId(caseId, taskId),
-      loadMoveCaseRow(pool, caseId, userId),
     ]);
 
   const questions = questionRows
     .map(mapQuestionRow)
     .sort((a, b) => a.sort_order - b.sort_order);
-
-  const storedAnswers = answerRows.map(mapAnswerRow);
-  const answers = buildPrefilledAnswers(questions, moveCase, storedAnswers);
+  const answers = answerRows.map(mapAnswerRow);
   const outputs = outputRows.map(mapOutputRow);
   const entities = entityRows.map(mapEntityRow);
 
@@ -1358,7 +1307,10 @@ export async function saveMoveCaseTaskAnswers(
       question_key: asString(item?.question_key),
       answer: toJsonValue(item?.answer),
     }))
-    .filter((item): item is { question_key: string; answer: unknown } => Boolean(item.question_key));
+    .filter(
+      (item): item is { question_key: string; answer: unknown } =>
+        Boolean(item.question_key)
+    );
 
   if (normalizedAnswers.length === 0) {
     throw new Error('Answers are required');
@@ -1436,9 +1388,7 @@ export async function saveMoveCaseTaskAnswers(
 
     for (const item of normalizedAnswers) {
       const answerJson =
-        item.answer === undefined
-          ? null
-          : JSON.stringify(item.answer);
+        item.answer === undefined ? null : JSON.stringify(item.answer);
 
       const updateResult = await client.query(
         `
@@ -1517,9 +1467,10 @@ export async function executeMoveCaseTaskAction(
 
   const beforeDetail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const selectedAction = resolveTaskAction(beforeDetail.task, actionType);
-  const moveCase = await loadMoveCaseRow(pool, caseId, userId);
+  const moveCase = await loadMoveCaseContext(caseId);
   const actionContext = buildActionContext(beforeDetail.task, moveCase);
   const client = await pool.connect();
+
   let outputKey = '';
   let outputType = '';
   let outputTitle: string | null = null;
@@ -1542,23 +1493,30 @@ export async function executeMoveCaseTaskAction(
       outputType = 'email_draft';
       outputTitle = 'E-Mail Entwurf';
     } else if (actionType === 'copy_text') {
-      actionData = buildCopyTextActionData(actionContext, selectedAction);
+      actionData = await buildCopyTextActionData(actionContext, selectedAction);
       outputKey = 'copy_text';
       outputType = 'copy_text';
       outputTitle = 'Kopiertext';
-    } else if (actionType === 'pdf') {
-      actionData = await buildPdfActionData(actionContext, selectedAction);
-      outputKey = 'pdf_document';
-      outputType = 'pdf';
-      outputTitle = asString(actionData.title) ?? 'PDF Dokument';
-    } else {
+    } else if (actionType === 'whatsapp') {
       actionData = buildWhatsappActionData(actionContext, selectedAction);
       outputKey = 'whatsapp_draft';
       outputType = 'whatsapp_draft';
       outputTitle = 'WhatsApp Entwurf';
+    } else {
+      actionData = await buildPdfActionData(actionContext, selectedAction, taskId);
+      outputKey = 'pdf_document';
+      outputType = 'pdf';
+      outputTitle = 'PDF Dokument';
     }
 
-    await saveMoveTaskOutput(client, taskId, outputKey, outputType, outputTitle, actionData);
+    await saveMoveTaskOutput(
+      client,
+      taskId,
+      outputKey,
+      outputType,
+      outputTitle,
+      actionData
+    );
 
     await client.query(
       `
@@ -1582,9 +1540,8 @@ export async function executeMoveCaseTaskAction(
 
   const detail = await getMoveCaseTaskDetail(caseId, taskId, userId);
   const createdOutput =
-    [...detail.task.outputs]
-      .reverse()
-      .find((output) => output.type === outputType) ?? null;
+    [...detail.task.outputs].reverse().find((output) => output.type === outputType) ??
+    null;
 
   return {
     action: {
