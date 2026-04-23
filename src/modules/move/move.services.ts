@@ -186,6 +186,8 @@ type MoveCaseContextRow = {
   id: string;
   move_date: string | null;
   language: string | null;
+  first_name: string | null;
+  last_name: string | null;
   from_street: string | null;
   from_house_number: string | null;
   from_zip: string | null;
@@ -195,6 +197,8 @@ type MoveCaseContextRow = {
   from_city_name: string | null;
   to_city_name: string | null;
 };
+
+const CONTRACT_REVIEW_TEMPLATE_ID = 'fd578679-193e-4f08-81a5-e8280ef25192';
 
 const schemaWarningCache = new Set<string>();
 
@@ -580,6 +584,194 @@ function buildFormCompletionSummary(
   };
 }
 
+function appendDefaultTaskAnswers(
+  questions: MoveTaskQuestionDto[],
+  answers: MoveTaskAnswerDto[],
+  moveCase: MoveCaseContextRow | null
+): MoveTaskAnswerDto[] {
+  if (!questions.length || !moveCase) return answers;
+
+  const existingKeys = new Set(
+    answers
+      .filter((answer) => hasAnswerValue(answer.value) || Boolean(answer.value_text))
+      .map((answer) => answer.question_key)
+      .filter((key): key is string => Boolean(key))
+  );
+
+  const oldAddress = buildOldAddress(moveCase);
+  const newAddress = buildNewAddress(moveCase);
+  const userName = buildUserName(moveCase);
+  const moveDate = asString(moveCase.move_date) ?? '';
+
+  const defaults: Record<string, string> = {
+    full_name: userName,
+    sender_name: userName,
+    sender_address: oldAddress,
+    old_address: oldAddress,
+    rental_object_address: oldAddress,
+    new_address: newAddress,
+    move_date: moveDate,
+    moveDate,
+    termination_date: moveDate,
+  };
+
+  const defaultAnswers = questions
+    .filter((question) => question.key && !existingKeys.has(question.key))
+    .map((question): MoveTaskAnswerDto | null => {
+      const value = question.key ? defaults[question.key] : '';
+      if (!value) return null;
+
+      return {
+        id: null,
+        question_id: question.id,
+        question_key: question.key,
+        value,
+        value_text: value,
+        created_at: null,
+        updated_at: null,
+      };
+    })
+    .filter((answer): answer is MoveTaskAnswerDto => Boolean(answer));
+
+  return [...answers, ...defaultAnswers];
+}
+
+function buildContractReviewEntity(): MoveTaskEntityDto {
+  return {
+    id: null,
+    entity_type: 'info_checklist',
+    entity_key: 'contract_review_checklist',
+    title: 'Verträge, die du prüfen solltest',
+    data: {
+      title: {
+        de: 'Verträge, die du prüfen solltest',
+        fr: 'Contrats à vérifier',
+        en: 'Contracts to review',
+      },
+      intro: {
+        de:
+          'Gehe deine laufenden Verträge einmal systematisch durch. Wichtig sind Kündigungsfristen, Umzugsservices, Verfügbarkeit am neuen Wohnort und allfällige Zählerstände.',
+        fr:
+          'Passe en revue tes contrats en cours. Vérifie surtout les délais de résiliation, les services de transfert, la disponibilité à la nouvelle adresse et les éventuels relevés de compteur.',
+        en:
+          'Review your active contracts systematically. Focus on notice periods, relocation services, availability at the new address and any meter readings.',
+      },
+      items: [
+        {
+          key: 'electricity',
+          badge: { de: 'Versorgung', fr: 'Énergie', en: 'Utilities' },
+          title: {
+            de: 'Strom, Gas und Wasser',
+            fr: 'Électricité, gaz et eau',
+            en: 'Electricity, gas and water',
+          },
+          text: {
+            de:
+              'Abmeldung oder Ummeldung prüfen, Zählerstände am Auszugstag notieren und klären, ob am neuen Wohnort eine Anmeldung nötig ist.',
+            fr:
+              'Vérifier la résiliation ou le transfert, relever les compteurs le jour du départ et clarifier si une inscription est nécessaire à la nouvelle adresse.',
+            en:
+              'Check cancellation or transfer, record meter readings on moving day and clarify whether registration is needed at the new address.',
+          },
+        },
+        {
+          key: 'internet',
+          badge: { de: 'Anschluss', fr: 'Connexion', en: 'Connection' },
+          title: {
+            de: 'Internet, TV und Telefon',
+            fr: 'Internet, TV et téléphone',
+            en: 'Internet, TV and phone',
+          },
+          text: {
+            de:
+              'Verfügbarkeit am neuen Wohnort prüfen, Umzugstermin beim Anbieter anmelden und Router/Rücksendung klären.',
+            fr:
+              'Vérifier la disponibilité à la nouvelle adresse, annoncer le déménagement au fournisseur et clarifier le routeur ou le retour du matériel.',
+            en:
+              'Check availability at the new address, notify the provider of the move date and clarify router or equipment returns.',
+          },
+        },
+        {
+          key: 'insurance',
+          badge: { de: 'Schutz', fr: 'Assurance', en: 'Insurance' },
+          title: {
+            de: 'Hausrat und Haftpflicht',
+            fr: 'Ménage et responsabilité civile',
+            en: 'Household and liability insurance',
+          },
+          text: {
+            de:
+              'Adresse, Wohnfläche, Wert des Hausrats und Deckung prüfen. Bei grösserer Wohnung kann eine Anpassung sinnvoll sein.',
+            fr:
+              'Vérifier l’adresse, la surface du logement, la valeur du ménage et la couverture. Une adaptation peut être utile si le logement est plus grand.',
+            en:
+              'Review address, living space, household value and coverage. An adjustment may be useful for a larger home.',
+          },
+        },
+        {
+          key: 'subscriptions',
+          badge: { de: 'Alltag', fr: 'Quotidien', en: 'Everyday' },
+          title: {
+            de: 'Abos und Lieferdienste',
+            fr: 'Abonnements et livraisons',
+            en: 'Subscriptions and deliveries',
+          },
+          text: {
+            de:
+              'Zeitungen, Streaming, ÖV-Abos, Fitness, Essenslieferungen und Online-Shops auf neue Adresse oder Kündigungsfrist prüfen.',
+            fr:
+              'Vérifier journaux, streaming, abonnements de transport, fitness, livraisons et boutiques en ligne pour l’adresse ou les délais de résiliation.',
+            en:
+              'Check newspapers, streaming, public transport passes, gym, deliveries and online shops for address changes or notice periods.',
+          },
+        },
+        {
+          key: 'parking_storage',
+          badge: { de: 'Extras', fr: 'Extras', en: 'Extras' },
+          title: {
+            de: 'Parkplatz, Lagerraum und Zusatzverträge',
+            fr: 'Place de parking, dépôt et contrats annexes',
+            en: 'Parking, storage and add-on contracts',
+          },
+          text: {
+            de:
+              'Separate Verträge für Parkplatz, Bastelraum, Lagerbox oder Zusatzservices prüfen und rechtzeitig kündigen oder übertragen.',
+            fr:
+              'Vérifier les contrats séparés pour parking, local, box de stockage ou services supplémentaires et les résilier ou transférer à temps.',
+            en:
+              'Review separate contracts for parking, hobby rooms, storage units or add-on services and cancel or transfer them in time.',
+          },
+        },
+      ],
+      tip: {
+        de:
+          'Tipp: Erstelle dir eine kurze Liste mit Anbieter, Vertragsnummer, Kündigungsfrist und gewünschter Aktion: kündigen, übertragen oder neu abschliessen.',
+        fr:
+          'Conseil : note le fournisseur, le numéro de contrat, le délai de résiliation et l’action souhaitée : résilier, transférer ou conclure à nouveau.',
+        en:
+          'Tip: Create a short list with provider, contract number, notice period and desired action: cancel, transfer or set up new.',
+      },
+    },
+    created_at: null,
+    updated_at: null,
+  };
+}
+
+function appendVirtualTaskEntities(
+  task: MoveCaseTaskDetailRow,
+  entities: MoveTaskEntityDto[]
+): MoveTaskEntityDto[] {
+  if (task.template_id !== CONTRACT_REVIEW_TEMPLATE_ID) {
+    return entities;
+  }
+
+  const hasChecklist = entities.some(
+    (entity) => entity.entity_key === 'contract_review_checklist'
+  );
+
+  return hasChecklist ? entities : [buildContractReviewEntity(), ...entities];
+}
+
 async function loadOptionalTableRows(
   tableName: string,
   whereColumn: string,
@@ -782,6 +974,8 @@ async function loadMoveCaseContext(caseId: string): Promise<MoveCaseContextRow |
         mc.id,
         mc.move_date,
         u.language,
+        u.first_name,
+        u.last_name,
         mc.from_street,
         mc.from_house_number,
         mc.from_zip,
@@ -823,6 +1017,11 @@ function buildNewAddress(moveCase: MoveCaseContextRow | null): string {
   const line1 = formatAddress([moveCase.to_street, moveCase.to_house_number]);
   const line2 = formatAddress([moveCase.to_zip, moveCase.to_city_name]);
   return [line1, line2].filter(Boolean).join(', ');
+}
+
+function buildUserName(moveCase: MoveCaseContextRow | null): string {
+  if (!moveCase) return '';
+  return formatAddress([moveCase.first_name, moveCase.last_name]);
 }
 
 function replaceTemplateVariables(
@@ -1111,6 +1310,7 @@ function buildActionContext(
 
   const oldAddress = buildOldAddress(moveCase);
   const newAddress = buildNewAddress(moveCase);
+  const userName = buildUserName(moveCase);
   const moveDate = asString(moveCase?.move_date) ?? '';
   const formattedMoveDate = formatDateByLanguage(moveDate, languageCode);
 
@@ -1123,9 +1323,9 @@ function buildActionContext(
       recipient_name: asString(answersByKey.get('recipient_name')) ?? '',
       recipient_email: asString(answersByKey.get('recipient_email')) ?? '',
       recipient_address: asString(answersByKey.get('recipient_address')) ?? '',
-      sender_name: asString(answersByKey.get('sender_name')) ?? '',
-      sender_address: asString(answersByKey.get('sender_address')) ?? '',
-      full_name: asString(answersByKey.get('full_name')) ?? '',
+      sender_name: asString(answersByKey.get('sender_name')) ?? userName,
+      sender_address: asString(answersByKey.get('sender_address')) ?? oldAddress,
+      full_name: asString(answersByKey.get('full_name')) ?? userName,
       delivery_method: asString(answersByKey.get('delivery_method')) ?? '',
       termination_date: formatDateByLanguage(
         asString(answersByKey.get('termination_date')) ?? moveDate,
@@ -1534,7 +1734,7 @@ export async function getMoveCaseTaskDetail(
   const taskRow = await loadOwnedMoveTaskRow(pool, caseId, taskId, userId);
   const baseTask = mapMoveCaseTask(taskRow);
 
-  const [questionRows, answerRows, outputRows, entityRows, nextTaskId] =
+  const [questionRows, answerRows, outputRows, entityRows, nextTaskId, moveCase] =
     await Promise.all([
       taskRow.template_id
         ? loadOptionalTableRows(
@@ -1547,14 +1747,16 @@ export async function getMoveCaseTaskDetail(
       loadOptionalTableRows('public.move_case_task_outputs', 'case_task_id', taskId),
       loadOptionalTableRows('public.move_case_task_entities', 'case_task_id', taskId),
       findNextRelevantMoveTaskId(caseId, taskId),
+      loadMoveCaseContext(caseId),
     ]);
 
   const questions = questionRows
+    .filter((row) => asBoolean(pickFirst(row, ['is_active', 'active'])) !== false)
     .map(mapQuestionRow)
     .sort((a, b) => a.sort_order - b.sort_order);
-  const answers = answerRows.map(mapAnswerRow);
+  const answers = appendDefaultTaskAnswers(questions, answerRows.map(mapAnswerRow), moveCase);
   const outputs = outputRows.map(mapOutputRow);
-  const entities = entityRows.map(mapEntityRow);
+  const entities = appendVirtualTaskEntities(taskRow, entityRows.map(mapEntityRow));
 
   return {
     task: {
