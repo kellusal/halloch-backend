@@ -140,7 +140,13 @@ type TaskActionMapping = {
   secondary: TaskAction | null;
 };
 
-const SUPPORTED_ACTION_TYPES = new Set(['web', 'email', 'copy_text', 'whatsapp']);
+const SUPPORTED_ACTION_TYPES = new Set([
+  'web',
+  'email',
+  'copy_text',
+  'whatsapp',
+  'pdf',
+]);
 
 type GeneratedTaskRow = {
   templateId: string;
