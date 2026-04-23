@@ -199,6 +199,7 @@ type MoveCaseContextRow = {
 };
 
 const CONTRACT_REVIEW_TEMPLATE_ID = 'fd578679-193e-4f08-81a5-e8280ef25192';
+const MOVING_HELPERS_TEMPLATE_ID = 'bb9cd8d9-ca6e-4f3b-abbe-0b16be61eccb';
 
 const schemaWarningCache = new Set<string>();
 
@@ -757,19 +758,131 @@ function buildContractReviewEntity(): MoveTaskEntityDto {
   };
 }
 
+function buildMovingHelpersEntity(): MoveTaskEntityDto {
+  return {
+    id: null,
+    entity_type: 'info_checklist',
+    entity_key: 'moving_helpers_checklist',
+    title: 'Umzugshilfe organisieren',
+    data: {
+      title: {
+        de: 'Was du vor dem Anfragen klären solltest',
+        fr: 'À clarifier avant de demander de l’aide',
+        en: 'What to clarify before asking for help',
+      },
+      intro: {
+        de:
+          'Je klarer du den Aufwand einschätzen kannst, desto einfacher wird es, Helfer zu organisieren oder Offerten von Umzugsfirmen zu vergleichen.',
+        fr:
+          'Plus tu peux estimer clairement l’effort nécessaire, plus il sera simple d’organiser de l’aide ou de comparer des offres de déménagement.',
+        en:
+          'The better you estimate the workload, the easier it is to organize helpers or compare moving company quotes.',
+      },
+      items: [
+        {
+          key: 'scope',
+          badge: { de: 'Aufwand', fr: 'Charge', en: 'Workload' },
+          title: {
+            de: 'Umfang realistisch einschätzen',
+            fr: 'Évaluer le volume de manière réaliste',
+            en: 'Estimate the scope realistically',
+          },
+          text: {
+            de:
+              'Überlege, wie viele Zimmer, Möbel und Kisten transportiert werden müssen und ob du eher Helfer oder ein professionelles Umzugsunternehmen brauchst.',
+            fr:
+              'Estime le nombre de pièces, de meubles et de cartons à déplacer et décide si des proches suffisent ou si une entreprise est plus adaptée.',
+            en:
+              'Estimate how many rooms, furniture items and boxes need to be moved and decide whether helpers are enough or a moving company is the better fit.',
+          },
+        },
+        {
+          key: 'timing',
+          badge: { de: 'Zeit', fr: 'Temps', en: 'Timing' },
+          title: {
+            de: 'Datum und Zeitfenster festlegen',
+            fr: 'Définir la date et le créneau',
+            en: 'Set the date and time window',
+          },
+          text: {
+            de:
+              'Halte fest, wann der Umzug startet, wie lange er ungefähr dauert und ob es feste Termine für Schlüsselübergabe oder Wohnungsabgabe gibt.',
+            fr:
+              'Précise l’heure de départ, la durée approximative et s’il existe des rendez-vous fixes pour la remise des clés ou l’état des lieux.',
+            en:
+              'Define when the move starts, how long it is likely to take and whether there are fixed appointments such as key handover or apartment inspection.',
+          },
+        },
+        {
+          key: 'logistics',
+          badge: { de: 'Logistik', fr: 'Logistique', en: 'Logistics' },
+          title: {
+            de: 'Transport und Zugang prüfen',
+            fr: 'Vérifier le transport et l’accès',
+            en: 'Check transport and access',
+          },
+          text: {
+            de:
+              'Kläre Lift, Stockwerk, Parkplatz, Haltemöglichkeit, Transporter und ob schwere oder sperrige Möbel speziell geplant werden müssen.',
+            fr:
+              'Clarifie l’ascenseur, l’étage, le stationnement, le véhicule et si certains meubles lourds ou encombrants demandent une organisation particulière.',
+            en:
+              'Check elevator access, floor level, parking, van availability and whether heavy or bulky furniture requires special planning.',
+          },
+        },
+        {
+          key: 'materials',
+          badge: { de: 'Material', fr: 'Matériel', en: 'Supplies' },
+          title: {
+            de: 'Material und Verpflegung vorbereiten',
+            fr: 'Prévoir le matériel et de quoi manger',
+            en: 'Prepare supplies and refreshments',
+          },
+          text: {
+            de:
+              'Organisiere Kisten, Klebeband, Decken, Tragehilfen sowie Wasser oder kleine Snacks. Das macht den Tag für alle deutlich einfacher.',
+            fr:
+              'Prévois cartons, ruban adhésif, couvertures, aides de portage ainsi que de l’eau ou quelques snacks. Cela facilite vraiment la journée.',
+            en:
+              'Prepare boxes, tape, blankets, carrying aids and some water or snacks. It makes the day much easier for everyone.',
+          },
+        },
+      ],
+      tip: {
+        de:
+          'Tipp: Wenn du Helfer anfragst, nenne direkt Datum, Startzeit, Strecke und ob schwere Möbel oder ein Transporter dabei sind.',
+        fr:
+          'Conseil : lorsque tu demandes de l’aide, indique directement la date, l’heure de départ, le trajet et s’il y a des meubles lourds ou un véhicule à prévoir.',
+        en:
+          'Tip: When asking for help, include the date, start time, route and whether heavy furniture or a vehicle are involved.',
+      },
+    },
+    created_at: null,
+    updated_at: null,
+  };
+}
+
 function appendVirtualTaskEntities(
   task: MoveCaseTaskDetailRow,
   entities: MoveTaskEntityDto[]
 ): MoveTaskEntityDto[] {
-  if (task.template_id !== CONTRACT_REVIEW_TEMPLATE_ID) {
-    return entities;
+  if (task.template_id === CONTRACT_REVIEW_TEMPLATE_ID) {
+    const hasChecklist = entities.some(
+      (entity) => entity.entity_key === 'contract_review_checklist'
+    );
+
+    return hasChecklist ? entities : [buildContractReviewEntity(), ...entities];
   }
 
-  const hasChecklist = entities.some(
-    (entity) => entity.entity_key === 'contract_review_checklist'
-  );
+  if (task.template_id === MOVING_HELPERS_TEMPLATE_ID) {
+    const hasChecklist = entities.some(
+      (entity) => entity.entity_key === 'moving_helpers_checklist'
+    );
 
-  return hasChecklist ? entities : [buildContractReviewEntity(), ...entities];
+    return hasChecklist ? entities : [buildMovingHelpersEntity(), ...entities];
+  }
+
+  return entities;
 }
 
 async function loadOptionalTableRows(
