@@ -185,6 +185,7 @@ type ExecuteMoveTaskActionResult = {
 type MoveCaseContextRow = {
   id: string;
   move_date: string | null;
+  language: string | null;
   from_street: string | null;
   from_house_number: string | null;
   from_zip: string | null;
@@ -336,10 +337,32 @@ function localizedScalar(
 
 function localizedPayloadScalar(
   value: unknown,
+  languageCode: 'de' | 'fr' | 'en' = 'de',
   fallback?: string | null
 ): string | null {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const record = value as Record<string, unknown>;
+
+    if (languageCode === 'fr') {
+      return (
+        asString(record.fr) ??
+        asString(record.de) ??
+        asString(record.en) ??
+        fallback ??
+        null
+      );
+    }
+
+    if (languageCode === 'en') {
+      return (
+        asString(record.en) ??
+        asString(record.de) ??
+        asString(record.fr) ??
+        fallback ??
+        null
+      );
+    }
+
     return (
       asString(record.de) ??
       asString(record.fr) ??
@@ -758,6 +781,7 @@ async function loadMoveCaseContext(caseId: string): Promise<MoveCaseContextRow |
       SELECT
         mc.id,
         mc.move_date,
+        u.language,
         mc.from_street,
         mc.from_house_number,
         mc.from_zip,
@@ -767,6 +791,8 @@ async function loadMoveCaseContext(caseId: string): Promise<MoveCaseContextRow |
         fc.name AS from_city_name,
         tc.name AS to_city_name
       FROM public.move_cases mc
+      INNER JOIN app.users u
+        ON u.id = mc.user_id
       LEFT JOIN public.move_cities fc ON fc.id = mc.from_city_id
       LEFT JOIN public.move_cities tc ON tc.id = mc.to_city_id
       WHERE mc.id = $1
@@ -812,7 +838,7 @@ function replaceTemplateVariables(
 
 async function loadOutputTemplate(
   taskTemplateId: string | null,
-  outputType: 'email' | 'copy_text' | 'pdf',
+  outputType: 'email' | 'copy_text' | 'whatsapp' | 'pdf',
   languageCode: 'de' | 'fr' | 'en' = 'de'
 ): Promise<GenericRow | null> {
   if (!taskTemplateId) return null;
@@ -849,37 +875,28 @@ function ensureGeneratedDir() {
   return dir;
 }
 
-function splitNonEmptyLines(value: string | null | undefined): string[] {
-  if (!value) return [];
-  return value
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
 function formatDateByLanguage(
   value: string | null | undefined,
   languageCode: 'de' | 'fr' | 'en'
 ): string {
   if (!value) return '';
+  void languageCode;
+
+  const isoDate = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (isoDate) {
+    return `${isoDate[3]}.${isoDate[2]}.${isoDate[1]}`;
+  }
 
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
     return String(value);
   }
 
-  const locale =
-    languageCode === 'fr'
-      ? 'fr-CH'
-      : languageCode === 'en'
-        ? 'en-CH'
-        : 'de-CH';
+  const day = String(date.getDate()).padStart(2, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const year = String(date.getFullYear());
 
-  return new Intl.DateTimeFormat(locale, {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-  }).format(date);
+  return `${day}.${month}.${year}`;
 }
 
 function normalizeAddressLines(value: string | null | undefined): string[] {
@@ -958,41 +975,34 @@ async function generatePdfFile(params: {
     const recipientLines = (params.recipientLines ?? []).filter(Boolean);
     const closingLines = (params.closingLines ?? []).filter(Boolean);
 
-    // Absender oben links
     if (senderLines.length) {
       drawLines(doc, senderLines, { fontSize: 10, lineGap: 1 });
       doc.moveDown(2);
     }
 
-    // Empfängerblock
     if (recipientLines.length) {
       drawLines(doc, recipientLines, { fontSize: 11, lineGap: 1 });
       doc.moveDown(2);
     }
 
-    // Ort / Datum
     if (params.placeDateLine?.trim()) {
       doc.font('Helvetica');
       doc.fontSize(11).text(params.placeDateLine.trim(), { align: 'left' });
       doc.moveDown(2);
     }
 
-    // Betreff
     doc.font('Helvetica-Bold');
     doc.fontSize(13).text(params.subject, { align: 'left' });
     doc.moveDown(1.5);
 
-    // Anrede
     if (params.greeting?.trim()) {
       doc.font('Helvetica');
       doc.fontSize(11).text(params.greeting.trim(), { align: 'left' });
       doc.moveDown();
     }
 
-    // Fliesstext
     drawParagraphs(doc, params.bodyParagraphs, { fontSize: 11 });
 
-    // Schlussblock
     if (closingLines.length) {
       doc.moveDown(0.5);
       drawLines(doc, closingLines, { fontSize: 11, lineGap: 1 });
@@ -1102,6 +1112,7 @@ function buildActionContext(
   const oldAddress = buildOldAddress(moveCase);
   const newAddress = buildNewAddress(moveCase);
   const moveDate = asString(moveCase?.move_date) ?? '';
+  const formattedMoveDate = formatDateByLanguage(moveDate, languageCode);
 
   return {
     task,
@@ -1116,23 +1127,39 @@ function buildActionContext(
       sender_address: asString(answersByKey.get('sender_address')) ?? '',
       full_name: asString(answersByKey.get('full_name')) ?? '',
       delivery_method: asString(answersByKey.get('delivery_method')) ?? '',
-      termination_date: asString(answersByKey.get('termination_date')) ?? moveDate,
+      termination_date: formatDateByLanguage(
+        asString(answersByKey.get('termination_date')) ?? moveDate,
+        languageCode
+      ),
       contract_reference: asString(answersByKey.get('contract_reference')) ?? '',
       rental_object_address:
         asString(answersByKey.get('rental_object_address')) ?? oldAddress,
       old_address: asString(answersByKey.get('old_address')) ?? oldAddress,
       new_address: asString(answersByKey.get('new_address')) ?? newAddress,
-      move_date: asString(answersByKey.get('move_date')) ?? moveDate,
+      from_address: oldAddress,
+      to_address: newAddress,
+      from_city: asString(moveCase?.from_city_name) ?? '',
+      to_city: asString(moveCase?.to_city_name) ?? '',
+      move_date: formatDateByLanguage(
+        asString(answersByKey.get('move_date')) ?? moveDate,
+        languageCode
+      ),
+      move_date_iso: moveDate,
       document_date: asString(answersByKey.get('document_date')) ?? '',
       newAddress: asString(answersByKey.get('new_address')) ?? newAddress,
-      moveDate: asString(answersByKey.get('move_date')) ?? moveDate,
+      moveDate: formatDateByLanguage(
+        asString(answersByKey.get('move_date')) ?? formattedMoveDate,
+        languageCode
+      ),
+      moveDateIso: moveDate,
     },
   };
 }
 
 function buildWebActionData(
   task: MoveCaseTaskDetailDto,
-  action: MoveTaskActionDto
+  action: MoveTaskActionDto,
+  languageCode: 'de' | 'fr' | 'en' = 'de'
 ) {
   const payload = action.payload ?? {};
   const url =
@@ -1147,7 +1174,11 @@ function buildWebActionData(
 
   return {
     url,
-    label: localizedPayloadScalar(payload.label, task.linkLabel ?? task.title),
+    label: localizedPayloadScalar(
+      payload.label,
+      languageCode,
+      task.linkLabel ?? task.title
+    ),
   };
 }
 
@@ -1164,12 +1195,12 @@ async function buildEmailActionData(
 
   const subjectTemplate =
     asString(templateRow?.subject_template) ??
-    localizedPayloadScalar(payload.subject) ??
+    localizedPayloadScalar(payload.subject, context.languageCode) ??
     `${context.task.title}`;
 
   const bodyTemplate =
     asString(templateRow?.body_template) ??
-    localizedPayloadScalar(payload.body) ??
+    localizedPayloadScalar(payload.body, context.languageCode) ??
     [
       context.task.description,
       context.task.city_service?.office_name,
@@ -1198,7 +1229,11 @@ async function buildEmailActionData(
     to,
     subject,
     body,
-    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? defaultLabel),
+    label: localizedPayloadScalar(
+      payload.label,
+      context.languageCode,
+      context.task.linkLabel ?? defaultLabel
+    ),
   };
 }
 
@@ -1215,8 +1250,8 @@ async function buildCopyTextActionData(
 
   const textTemplate =
     asString(templateRow?.body_template) ??
-    localizedPayloadScalar(payload.text) ??
-    localizedPayloadScalar(payload.body) ??
+    localizedPayloadScalar(payload.text, context.languageCode) ??
+    localizedPayloadScalar(payload.body, context.languageCode) ??
     asString(context.answersByKey.get('copy_text')) ??
     context.task.description ??
     context.task.title;
@@ -1232,18 +1267,29 @@ async function buildCopyTextActionData(
 
   return {
     text,
-    label: localizedPayloadScalar(payload.label, context.task.linkLabel ?? defaultLabel),
+    label: localizedPayloadScalar(
+      payload.label,
+      context.languageCode,
+      context.task.linkLabel ?? defaultLabel
+    ),
   };
 }
 
-function buildWhatsappActionData(
+async function buildWhatsappActionData(
   context: ReturnType<typeof buildActionContext>,
   action: MoveTaskActionDto
 ) {
   const payload = action.payload ?? {};
+  const templateRow = await loadOutputTemplate(
+    context.task.templateId,
+    'whatsapp',
+    context.languageCode
+  );
+
   const textTemplate =
-    localizedPayloadScalar(payload.message) ??
-    localizedPayloadScalar(payload.body) ??
+    asString(templateRow?.body_template) ??
+    localizedPayloadScalar(payload.message, context.languageCode) ??
+    localizedPayloadScalar(payload.body, context.languageCode) ??
     context.task.description ??
     context.task.title;
 
@@ -1258,7 +1304,7 @@ function buildWhatsappActionData(
 
   return {
     text,
-    label: localizedPayloadScalar(payload.label, defaultLabel),
+    label: localizedPayloadScalar(payload.label, context.languageCode, defaultLabel),
   };
 }
 
@@ -1277,13 +1323,13 @@ async function buildPdfActionData(
 
   const subject =
     asString(fileTemplateJson.title) ??
-    localizedPayloadScalar((payload as Record<string, unknown>).title) ??
+    localizedPayloadScalar((payload as Record<string, unknown>).title, context.languageCode) ??
     context.task.title ??
     'Dokument';
 
   const bodyTemplate =
     asString(fileTemplateJson.body) ??
-    localizedPayloadScalar((payload as Record<string, unknown>).body) ??
+    localizedPayloadScalar((payload as Record<string, unknown>).body, context.languageCode) ??
     context.task.description ??
     '';
 
@@ -1381,7 +1427,7 @@ async function buildPdfActionData(
     file_url: pdf.fileUrl,
     title: subject,
     body,
-    label: localizedPayloadScalar(payload.label, defaultLabel),
+    label: localizedPayloadScalar(payload.label, context.languageCode, defaultLabel),
   };
 }
 
@@ -1713,7 +1759,8 @@ export async function executeMoveCaseTaskAction(
   caseId: string,
   taskId: string,
   actionType: string,
-  userId: number | string
+  userId: number | string,
+  requestedLanguage?: unknown
 ): Promise<ExecuteMoveTaskActionResult> {
   if (!caseId?.trim()) {
     throw new Error('Case id is required');
@@ -1738,7 +1785,11 @@ export async function executeMoveCaseTaskAction(
     beforeDetail.task.answers.find((answer) => answer.question_key === 'language_code');
 
   const languageCode = normalizeLanguageCode(
-    languageAnswer?.value ?? languageAnswer?.value_text ?? 'de'
+    requestedLanguage ??
+      languageAnswer?.value ??
+      languageAnswer?.value_text ??
+      moveCase?.language ??
+      'de'
   );
 
   const actionContext = buildActionContext(
@@ -1761,7 +1812,7 @@ export async function executeMoveCaseTaskAction(
     let actionData: Record<string, unknown>;
 
     if (normalizedActionType === 'web') {
-      actionData = buildWebActionData(beforeDetail.task, selectedAction);
+      actionData = buildWebActionData(beforeDetail.task, selectedAction, languageCode);
       outputKey = 'link_opened';
       outputType = 'link_opened';
       outputTitle = 'Link geöffnet';
@@ -1776,7 +1827,7 @@ export async function executeMoveCaseTaskAction(
       outputType = 'copy_text';
       outputTitle = 'Kopiertext';
     } else if (normalizedActionType === 'whatsapp') {
-      actionData = buildWhatsappActionData(actionContext, selectedAction);
+      actionData = await buildWhatsappActionData(actionContext, selectedAction);
       outputKey = 'whatsapp_draft';
       outputType = 'whatsapp_draft';
       outputTitle = 'WhatsApp Entwurf';

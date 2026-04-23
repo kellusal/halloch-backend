@@ -122,10 +122,17 @@ type TemplateCapability = {
   sortOrder: number;
 };
 
+type LocalizedPayloadText = {
+  de: string | null;
+  fr: string | null;
+  en: string | null;
+};
+
 type ResolvedTaskContext = {
   cityServiceId: string | null;
   externalUrl: string | null;
   linkLabel: string | null;
+  linkLabelI18n: LocalizedPayloadText;
   isCitySpecific: boolean;
   service: CityServiceRow | null;
 };
@@ -481,15 +488,17 @@ export function resolveTaskContext(
       : null;
 
   if (service) {
+    const linkLabelI18n = {
+      de: service.title_de,
+      fr: service.title_fr,
+      en: service.title_en,
+    };
+
     return {
       cityServiceId: service.id,
       externalUrl: service.website_url ?? null,
-      linkLabel:
-        localizedText(context.language, {
-          de: service.title_de,
-          fr: service.title_fr,
-          en: service.title_en,
-        }) ?? null,
+      linkLabel: localizedText(context.language, linkLabelI18n) ?? null,
+      linkLabelI18n,
       isCitySpecific: true,
       service,
     };
@@ -502,15 +511,17 @@ export function resolveTaskContext(
     context.toCantonId
   );
 
+  const linkLabelI18n = {
+    de: selectedLink?.label_de ?? null,
+    fr: selectedLink?.label_fr ?? null,
+    en: selectedLink?.label_en ?? null,
+  };
+
   return {
     cityServiceId: null,
     externalUrl: selectedLink?.url ?? null,
-    linkLabel:
-      localizedText(context.language, {
-        de: selectedLink?.label_de ?? null,
-        fr: selectedLink?.label_fr ?? null,
-        en: selectedLink?.label_en ?? null,
-      }) ?? null,
+    linkLabel: localizedText(context.language, linkLabelI18n) ?? null,
+    linkLabelI18n,
     isCitySpecific: Boolean(selectedLink?.city_id || selectedLink?.canton_id),
     service: null,
   };
@@ -518,7 +529,7 @@ export function resolveTaskContext(
 
 function createFallbackAction(
   externalUrl: string | null,
-  linkLabel: string | null
+  linkLabelI18n: LocalizedPayloadText
 ): TaskActionMapping {
   if (!externalUrl) {
     return { primary: null, secondary: null };
@@ -529,7 +540,7 @@ function createFallbackAction(
       actionType: 'web',
       actionPayload: {
         url: externalUrl,
-        label: { de: linkLabel, fr: linkLabel, en: linkLabel },
+        label: linkLabelI18n,
       },
     },
     secondary: null,
@@ -549,11 +560,11 @@ export function mapCapabilitiesToActions(
       continue;
     }
 
-    const label = buildLocalizedPayloadValue(capability.payload, 'label', {
-      de: resolvedContext.linkLabel,
-      fr: resolvedContext.linkLabel,
-      en: resolvedContext.linkLabel,
-    });
+    const label = buildLocalizedPayloadValue(
+      capability.payload,
+      'label',
+      resolvedContext.linkLabelI18n
+    );
 
     if (capability.capabilityKey === 'prepare_email') {
       const recipientSource = asString(capability.payload.recipient_source);
@@ -608,7 +619,7 @@ export function mapCapabilitiesToActions(
   }
 
   if (actions.length === 0) {
-    return createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabel);
+    return createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabelI18n);
   }
 
   return {
@@ -1521,7 +1532,7 @@ export async function generateMoveCaseTasks(caseId: string) {
           resolvedContext,
           legacyActions.primary || legacyActions.secondary
             ? legacyActions
-            : createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabel)
+            : createFallbackAction(resolvedContext.externalUrl, resolvedContext.linkLabelI18n)
         );
 
         await upsertMoveCaseTask(

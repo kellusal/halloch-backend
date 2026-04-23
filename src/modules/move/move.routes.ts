@@ -996,7 +996,8 @@ router.post(
         caseId,
         taskId,
         actionType,
-        userId
+        userId,
+        req.body?.language ?? req.query.language
       );
 
       logMoveEvent('[MOVE_TASK_ACTION_OK]', req, {

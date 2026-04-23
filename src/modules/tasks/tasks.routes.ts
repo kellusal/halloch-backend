@@ -20,6 +20,9 @@ type MoveCaseTaskRow = {
   case_id: string;
   category: string | null;
   title: string;
+  title_de: string | null;
+  title_fr: string | null;
+  title_en: string | null;
   description: string | null;
   status: 'open' | 'done' | 'skipped';
   due_date: string | null;
@@ -37,6 +40,9 @@ type OverviewModule = {
   progress: number;
   openCount: number;
   nextTask: string | null;
+  nextTaskDe: string | null;
+  nextTaskFr: string | null;
+  nextTaskEn: string | null;
   route: string;
   tone: 'red';
   statusLabel: string;
@@ -45,6 +51,9 @@ type OverviewModule = {
 type OverviewTask = {
   id: string;
   title: string;
+  title_de: string | null;
+  title_fr: string | null;
+  title_en: string | null;
   module: string;
   due: string;
   status: 'open' | 'soon';
@@ -55,12 +64,18 @@ type OverviewTask = {
 type OverviewDoneTask = {
   id: string;
   title: string;
+  title_de: string | null;
+  title_fr: string | null;
+  title_en: string | null;
   module: string;
   when: string;
 };
 
 type FocusTask = {
   title: string;
+  title_de: string | null;
+  title_fr: string | null;
+  title_en: string | null;
   module: string;
   due: string;
   route: string;
@@ -123,6 +138,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           case_id,
           category,
           title,
+          title_de,
+          title_fr,
+          title_en,
           description,
           status,
           due_date,
@@ -169,6 +187,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
           progress,
           openCount: openTasks.length,
           nextTask: nextTask?.title ?? null,
+          nextTaskDe: nextTask?.title_de ?? null,
+          nextTaskFr: nextTask?.title_fr ?? null,
+          nextTaskEn: nextTask?.title_en ?? null,
           route: `/move/${latestMoveCase.id}`,
           tone: 'red',
           statusLabel: latestMoveCase.status === 'done' ? 'Abgeschlossen' : 'Aktiv',
@@ -178,6 +199,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
       tasks = openTasks.slice(0, 6).map((task) => ({
         id: task.id,
         title: task.title,
+        title_de: task.title_de,
+        title_fr: task.title_fr,
+        title_en: task.title_en,
         module: 'Umzug',
         due: formatDueLabel(task.due_date),
         status: isDueSoon(task.due_date) ? 'soon' : 'open',
@@ -195,6 +219,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
         .map((task) => ({
           id: task.id,
           title: task.title,
+          title_de: task.title_de,
+          title_fr: task.title_fr,
+          title_en: task.title_en,
           module: 'Umzug',
           when: formatDoneLabel(task.completed_at),
         }));
@@ -202,6 +229,9 @@ router.get('/overview', requireAuth, async (req: Request, res: Response) => {
       focusTask = openTasks[0]
         ? {
             title: openTasks[0].title,
+            title_de: openTasks[0].title_de,
+            title_fr: openTasks[0].title_fr,
+            title_en: openTasks[0].title_en,
             module: 'Umzug',
             due: formatDueLabel(openTasks[0].due_date),
             route: `/move/task/${latestMoveCase.id}/${openTasks[0].id}`,
